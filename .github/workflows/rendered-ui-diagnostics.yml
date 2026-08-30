@@ -130,16 +130,28 @@ jobs:
                 "updates": [{ "status": "resolved", "message": "復旧を確認しました", "published_at": "2026-08-29T02:15:00Z" }]
               }
             ],
-            "maintenance": [{
-              "public_id": "MNT-ABCDEF123456",
-              "title": "Minecraft 定期メンテナンス",
-              "summary": "短時間の再起動を予定しています",
-              "affected_service_ids": ["minecraft-network"],
-              "starts_at": "2026-09-01T03:00:00Z",
-              "ends_at": "2026-09-01T04:00:00Z",
-              "state": "scheduled",
-              "updated_at": "2026-08-30T07:00:00Z"
-            }],
+            "maintenance": [
+              {
+                "public_id": "MNT-ABCDEF123456",
+                "title": "Minecraft 定期メンテナンス",
+                "summary": "短時間の再起動を予定しています",
+                "affected_service_ids": ["minecraft-network"],
+                "starts_at": "2026-09-01T03:00:00Z",
+                "ends_at": "2026-09-01T04:00:00Z",
+                "state": "scheduled",
+                "updated_at": "2026-08-30T07:00:00Z"
+              },
+              {
+                "public_id": "MNT-DEFABC123456",
+                "title": "過去のメンテナンス",
+                "summary": "公開Archive保持確認用の完了済みメンテナンス",
+                "affected_service_ids": ["herta-discord-bot"],
+                "starts_at": "2026-06-01T03:00:00Z",
+                "ends_at": "2026-06-01T04:00:00Z",
+                "state": "completed",
+                "updated_at": "2026-06-01T04:00:00Z"
+              }
+            ],
             "announcements": [{
               "public_id": "ANN-ABCDEF123456",
               "kind": "warning",
