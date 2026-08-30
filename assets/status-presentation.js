@@ -619,8 +619,9 @@ function enhanceTimelineBars(snapshot) {
       });
       button.addEventListener("blur", () => {
         window.setTimeout(() => {
+          if (portalState.activePopoverAnchor !== button) return;
           const popover = $("timelinePopover");
-          if (!popover?.contains(document.activeElement)) closeTimelinePopover();
+          if (!popover?.contains(document.activeElement) && document.activeElement !== button) closeTimelinePopover();
         }, 0);
       });
       button.addEventListener("click", (event) => {
