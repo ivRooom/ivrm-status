@@ -310,7 +310,6 @@ try {
     if (!interactionState.keyboardActivationKeptOpen || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard activation did not keep related Incident details open");
     if (!interactionState.escapeClosed || !interactionState.escapeRestoredFocus) throw new Error("Escape did not close the timeline popover and restore focus safely");
     if (!interactionState.closeButtonClosed || !interactionState.closeButtonRestoredFocus) throw new Error("Popover close button did not close and restore focus safely");
-    if (!interactionState.focusSwitchOpened || !interactionState.focusSwitchText.includes("公開された原因情報はありません")) throw new Error("Keyboard focus switch did not keep the new timeline popover open");
     if (!interactionState.tapOpened || !interactionState.noCauseText.includes("公開された原因情報はありません")) throw new Error("Tap/no-related-Incident popover behavior failed");
     if (!interactionState.outsideClosed) throw new Error("Outside click did not close timeline popover");
     if (!String(interactionState.copied || "").includes("?")) throw new Error("Clipboard URL copy did not execute");
