@@ -10,7 +10,7 @@ import {
   safeText,
 } from "./status-portal-core.js";
 
-const API_PATH = "/api/status-history.json";
+const API_PATH = "/api/status.json";
 const $ = (id) => document.getElementById(id);
 
 const STATUS_COPY = {
@@ -252,7 +252,7 @@ function handleDeepLink() {
 
 async function loadArchive({ announce = false } = {}) {
   try {
-    const response = await fetch(`${API_PATH}?days=30&archive=${Date.now()}`, { cache: "no-store", headers: { Accept: "application/json" } });
+    const response = await fetch(`${API_PATH}?archive=${Date.now()}`, { cache: "no-store", headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!data || !Array.isArray(data.services)) throw new Error("invalid response");
