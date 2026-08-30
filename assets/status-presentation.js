@@ -617,13 +617,6 @@ function enhanceTimelineBars(snapshot) {
       button.addEventListener("focus", () => {
         if (!portalState.restoringPopoverFocus) openTimelinePopover(button, bucket, service);
       });
-      button.addEventListener("blur", () => {
-        window.setTimeout(() => {
-          if (portalState.activePopoverAnchor !== button) return;
-          const popover = $("timelinePopover");
-          if (!popover?.contains(document.activeElement) && document.activeElement !== button) closeTimelinePopover();
-        }, 0);
-      });
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         openTimelinePopover(button, bucket, service);
@@ -724,6 +717,15 @@ async function refreshPortal() {
 function bindPortalGlobalInteractions() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeTimelinePopover({ restoreFocus: true });
+  });
+  document.addEventListener("focusin", (event) => {
+    const popover = $("timelinePopover");
+    if (popover?.hidden) return;
+    const target = event.target;
+    if (popover.contains(target)) return;
+    if (target === portalState.activePopoverAnchor) return;
+    if (target instanceof Element && target.closest("button.uptime-bar[data-portal-ready='true']")) return;
+    closeTimelinePopover();
   });
   document.addEventListener("pointerdown", (event) => {
     const popover = $("timelinePopover");
