@@ -124,7 +124,7 @@ jobs:
           OCI_HOST: ${{ secrets.OCI_HOST }}
           OCI_USER: ${{ secrets.OCI_USER }}
         run: |
-          ssh "${OCI_USER}@${OCI_HOST}" <<'REMOTE'
+          ssh "${OCI_USER}@${OCI_HOST}" "ASSET_VERSION=${GITHUB_SHA} bash -s" <<'REMOTE'
             set -Eeuo pipefail
             RELEASE_DIR="$(mktemp -d)"
             trap 'rm -rf "$RELEASE_DIR" /tmp/ivrm-stats-release.tar.gz' EXIT
