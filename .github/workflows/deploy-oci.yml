@@ -40,6 +40,7 @@ jobs:
           node --check assets/history.js
           node --check assets/status-presentation.js
           node --check assets/minecraft-servers.js
+          node scripts/test-status-portal-core.mjs
           bash -n scripts/deploy-oci.sh
           bash -n scripts/rollback-oci.sh
 
@@ -85,7 +86,7 @@ jobs:
           tar -czf /tmp/ivrm-stats-release.tar.gz \
             index.html history assets \
             scripts/validate.py scripts/test-api-fetch-guard.mjs \
-            scripts/test-page-load-guard.mjs \
+            scripts/test-page-load-guard.mjs scripts/test-status-portal-core.mjs \
             scripts/deploy-oci.sh scripts/rollback-oci.sh \
             deploy/status-api/collect-minecraft-runtime.py \
             deploy/status-api/ivrm-minecraft-runtime-collector.service \
@@ -106,6 +107,7 @@ jobs:
           node --check assets/history.js
           node --check assets/status-presentation.js
           node --check assets/minecraft-servers.js
+          node scripts/test-status-portal-core.mjs
           bash -n scripts/deploy-oci.sh
           bash -n scripts/rollback-oci.sh
 
