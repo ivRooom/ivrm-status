@@ -272,11 +272,15 @@ class PublicContentSource:
                         now=resolved_now,
                         stale_seconds=self.stale_seconds,
                     )
-                    self._write_cache(payload, resolved_now)
+                except Exception:
+                    snapshot = None
+                if snapshot is not None:
+                    try:
+                        self._write_cache(payload, resolved_now)
+                    except OSError:
+                        pass
                     self._snapshot = snapshot
                     return snapshot
-                except Exception:
-                    pass
 
             cached = self._read_cache(resolved_now)
             if cached is not None:
