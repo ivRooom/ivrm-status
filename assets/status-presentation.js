@@ -775,7 +775,10 @@ function bindPortalGlobalInteractions() {
     const popover = $("timelinePopover");
     if (popover && !popover.hidden && portalState.activePopoverAnchor) positionPopover(portalState.activePopoverAnchor, popover);
   });
-  window.addEventListener("scroll", () => closeTimelinePopover(), { passive: true });
+  window.addEventListener("scroll", () => {
+    const popover = $("timelinePopover");
+    if (popover && !popover.hidden && portalState.activePopoverAnchor) positionPopover(portalState.activePopoverAnchor, popover);
+  }, { passive: true });
   $("refreshButton")?.addEventListener("click", () => window.setTimeout(() => refreshPortal({ announce: true }), 250));
 }
 
