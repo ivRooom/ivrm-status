@@ -7,15 +7,20 @@ from .db import Snapshot, StatusRepository
 from .minecraft import MinecraftSource
 from .minecraft_probe import MinecraftStatusProbe
 from .models import (
+    PublicAnnouncement,
     PublicHistoryDay,
     PublicHistoryRange,
     PublicHistoryResponse,
     PublicHistoryService,
+    PublicIncident,
+    PublicMaintenance,
     PublicService,
     PublicStatus,
     PublicStatusResponse,
+    PublicTimelineBucket,
     worst_status,
 )
+from .public_content import PublicContentSource
 
 
 class StatusService:
@@ -39,18 +44,42 @@ class StatusService:
             stale_after_seconds=settings.minecraft_stale_after_seconds,
             probe=minecraft_probe,
         )
+        self.public_content = PublicContentSource(
+            feed_url=settings.public_content_feed_url,
+            cache_path=settings.public_content_cache_path,
+            timeout_seconds=settings.public_content_timeout_seconds,
+            refresh_seconds=settings.public_content_refresh_seconds,
+            stale_seconds=settings.public_content_stale_seconds,
+        )
 
     def public_status(self, now: datetime | None = None) -> PublicStatusResponse:
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
+        content = self.public_content.get(generated_at)
         services = [
             self.minecraft.public_service(generated_at),
             self._herta_service(generated_at),
+        ]
+        services = [
+            service.model_copy(
+                update={
+                    "timeline_details": self._timeline_details(
+                        service.id,
+                        service.timeline,
+                        generated_at,
+                        content.incidents,
+                    )
+                }
+            )
+            for service in services
         ]
         return PublicStatusResponse(
             generated_at=generated_at,
             overall_status=worst_status([service.status for service in services]),
             services=services,
-            incidents=[],
+            incidents=content.incidents,
+            maintenance=content.maintenance,
+            announcements=content.announcements,
+            content_meta=content.meta,
         )
 
     def public_history(
@@ -64,9 +93,8 @@ class StatusService:
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
         start_date = generated_at.date() - timedelta(days=days - 1)
         start = datetime.combine(start_date, time.min, tzinfo=UTC)
-        current_services = {
-            service.id: service for service in self.public_status(generated_at).services
-        }
+        current_status = self.public_status(generated_at)
+        current_services = {service.id: service for service in current_status.services}
 
         minecraft = current_services["minecraft-network"]
         herta = current_services["herta-discord-bot"]
@@ -112,7 +140,14 @@ class StatusService:
                     days=herta_days,
                 ),
             ],
-            incidents=[],
+            incidents=self._history_incidents(current_status.incidents, start, generated_at),
+            maintenance=self._history_maintenance(current_status.maintenance, start, generated_at),
+            announcements=self._history_announcements(
+                current_status.announcements,
+                start,
+                generated_at,
+            ),
+            content_meta=current_status.content_meta,
         )
 
     def _herta_service(self, now: datetime) -> PublicService:
@@ -171,6 +206,86 @@ class StatusService:
             index = min(23, int((received - start).total_seconds() // 3600))
             buckets[index].append(snapshot.status)
         return [worst_status(bucket) if bucket else PublicStatus.UNKNOWN for bucket in buckets]
+
+    @staticmethod
+    def _timeline_details(
+        service_id: str,
+        timeline: list[PublicStatus],
+        end: datetime,
+        incidents: list[PublicIncident],
+    ) -> list[PublicTimelineBucket]:
+        bucket_count = len(timeline)
+        if bucket_count == 0:
+            return []
+        start = end - timedelta(hours=bucket_count)
+        result: list[PublicTimelineBucket] = []
+        for index, status in enumerate(timeline):
+            bucket_start = start + timedelta(hours=index)
+            bucket_end = min(end, bucket_start + timedelta(hours=1))
+            related = [
+                incident
+                for incident in incidents
+                if service_id in incident.affected_service_ids
+                and incident.started_at.astimezone(UTC) < bucket_end
+                and (
+                    incident.resolved_at.astimezone(UTC)
+                    if incident.resolved_at
+                    else end
+                ) > bucket_start
+            ]
+            related.sort(key=lambda item: item.updated_at, reverse=True)
+            result.append(
+                PublicTimelineBucket(
+                    start_at=bucket_start,
+                    end_at=bucket_end,
+                    status=status,
+                    related_incident_ids=[item.public_id for item in related[:32]],
+                    summary=related[0].summary if related else None,
+                )
+            )
+        return result
+
+    @staticmethod
+    def _history_incidents(
+        incidents: list[PublicIncident],
+        start: datetime,
+        end: datetime,
+    ) -> list[PublicIncident]:
+        return [
+            incident
+            for incident in incidents
+            if incident.started_at.astimezone(UTC) <= end
+            and (
+                incident.resolved_at.astimezone(UTC)
+                if incident.resolved_at
+                else end
+            ) >= start
+        ]
+
+    @staticmethod
+    def _history_maintenance(
+        maintenance: list[PublicMaintenance],
+        start: datetime,
+        end: datetime,
+    ) -> list[PublicMaintenance]:
+        return [
+            item
+            for item in maintenance
+            if item.starts_at.astimezone(UTC) <= end
+            and item.ends_at.astimezone(UTC) >= start
+        ]
+
+    @staticmethod
+    def _history_announcements(
+        announcements: list[PublicAnnouncement],
+        start: datetime,
+        end: datetime,
+    ) -> list[PublicAnnouncement]:
+        return [
+            item
+            for item in announcements
+            if start <= item.published_at.astimezone(UTC) <= end
+        ]
 
     @staticmethod
     def _daily_history(
