@@ -1,6 +1,7 @@
 import {
   ANNOUNCEMENT_ID_PATTERN,
   INCIDENT_ID_PATTERN,
+  MAINTENANCE_ID_PATTERN,
   asArray,
   buildPublicRecordUrl,
   normalizePublicCollections,
@@ -75,6 +76,7 @@ const portalState = {
   activePopoverAnchor: null,
   closeTimer: null,
   deepLinkHandled: false,
+  restoringPopoverFocus: false,
 };
 
 function ensurePortalStyles() {
@@ -519,7 +521,14 @@ function closeTimelinePopover({ restoreFocus = false } = {}) {
   popover.replaceChildren();
   if (anchor) anchor.setAttribute("aria-expanded", "false");
   portalState.activePopoverAnchor = null;
-  if (restoreFocus && anchor?.isConnected) anchor.focus();
+  if (restoreFocus && anchor?.isConnected) {
+    portalState.restoringPopoverFocus = true;
+    try {
+      anchor.focus({ preventScroll: true });
+    } finally {
+      portalState.restoringPopoverFocus = false;
+    }
+  }
 }
 
 function positionPopover(anchor, popover) {
@@ -605,7 +614,9 @@ function enhanceTimelineBars(snapshot) {
       button.setAttribute("aria-label", timelineAriaLabel(service, bucket));
       button.addEventListener("mouseenter", () => openTimelinePopover(button, bucket, service));
       button.addEventListener("mouseleave", schedulePopoverClose);
-      button.addEventListener("focus", () => openTimelinePopover(button, bucket, service));
+      button.addEventListener("focus", () => {
+        if (!portalState.restoringPopoverFocus) openTimelinePopover(button, bucket, service);
+      });
       button.addEventListener("blur", () => {
         window.setTimeout(() => {
           const popover = $("timelinePopover");
@@ -614,8 +625,7 @@ function enhanceTimelineBars(snapshot) {
       });
       button.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (portalState.activePopoverAnchor === button && !$("timelinePopover")?.hidden) closeTimelinePopover();
-        else openTimelinePopover(button, bucket, service);
+        openTimelinePopover(button, bucket, service);
       });
       bar.replaceWith(button);
     });
@@ -628,6 +638,40 @@ function findDeepLinkedRecord(snapshot, deepLink) {
   if (deepLink.kind === "maintenance") return asArray(snapshot?.maintenance).find((record) => safeText(record?.public_id) === deepLink.id) || null;
   if (deepLink.kind === "announcement") return asArray(snapshot?.announcements).find((record) => safeText(record?.public_id) === deepLink.id) || null;
   return null;
+}
+
+function createPublicRecordCard(record) {
+  const publicId = safeText(record?.public_id);
+  if (INCIDENT_ID_PATTERN.test(publicId)) return createIncidentCard(record);
+  if (MAINTENANCE_ID_PATTERN.test(publicId)) return createMaintenanceCard(record);
+  if (ANNOUNCEMENT_ID_PATTERN.test(publicId)) return createAnnouncementCard(record);
+  return null;
+}
+
+function ensureDeepLinkedRecord(record) {
+  const publicId = safeText(record?.public_id);
+  const existing = document.getElementById(`public-${publicId}`);
+  if (existing) return existing;
+
+  const card = createPublicRecordCard(record);
+  const upcomingSection = $("upcomingMaintenance");
+  if (!card || !upcomingSection) return null;
+
+  let section = $("deepLinkedPublicRecord");
+  if (!section) {
+    section = createPortalSection({
+      id: "deepLinkedPublicRecord",
+      label: "SHARED RECORD",
+      title: "共有された公開情報",
+      description: "共有URLで指定された公開情報を表示しています。",
+    });
+    upcomingSection.after(section);
+  }
+
+  const list = $("deepLinkedPublicRecordList");
+  list?.replaceChildren(card);
+  section.hidden = false;
+  return card;
 }
 
 function handleDeepLink(snapshot) {
@@ -644,7 +688,7 @@ function handleDeepLink(snapshot) {
     showPortalToast("指定された公開情報は見つかりませんでした");
     return;
   }
-  const target = document.getElementById(`public-${deepLink.id}`);
+  const target = ensureDeepLinkedRecord(record);
   if (!target) return;
   target.classList.add("is-deep-linked");
   target.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
