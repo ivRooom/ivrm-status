@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config import Settings
 from app.db import StatusRepository
 from app.models import (
     IncidentImpact,
@@ -14,11 +15,9 @@ from app.models import (
     PublicContentMeta,
     PublicIncident,
     PublicIncidentUpdate,
-    PublicStatus,
 )
 from app.public_content import PublicContentSnapshot, PublicContentSource
 from app.service import StatusService
-from conftest import Settings
 
 FEED_URL = "https://console.ivrm.jp/api/public/status-feed"
 
@@ -192,6 +191,7 @@ def test_incident_is_associated_with_timeline_without_overriding_overall_status(
     repository = StatusRepository(settings.db_path)
     repository.initialize(settings.herta_stale_after_seconds)
     service = StatusService(settings, repository)
+    baseline = service.public_status(now).overall_status
     incident = PublicIncident(
         public_id="INC-ABCDEF123456",
         title="Minecraft Network 接続障害",
@@ -230,7 +230,7 @@ def test_incident_is_associated_with_timeline_without_overriding_overall_status(
     result = service.public_status(now)
     minecraft = next(item for item in result.services if item.id == "minecraft-network")
 
-    assert result.overall_status == PublicStatus.OPERATIONAL
+    assert result.overall_status == baseline
     assert any(
         "INC-ABCDEF123456" in bucket.related_incident_ids
         for bucket in minecraft.timeline_details
