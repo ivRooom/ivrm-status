@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#07090d" />
-    <meta name="description" content="ivRooomが提供するサービスの過去30日間の稼働履歴を確認できます。" />
+    <meta name="description" content="ivRooomが提供するサービスの稼働履歴と公開Incident・Maintenance・Announcementを確認できます。" />
     <title>稼働履歴 | ivRooom Status</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/styles.css" />
-    <link rel="stylesheet" href="/assets/history.css" />
-    <link rel="stylesheet" href="/assets/navigation.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260830-1" />
+    <link rel="stylesheet" href="/assets/history.css?v=20260830-1" />
+    <link rel="stylesheet" href="/assets/navigation.css?v=20260830-1" />
+    <link rel="stylesheet" href="/assets/status-portal.css?v=20260830-1" />
   </head>
   <body>
     <div class="page-glow page-glow-a" aria-hidden="true"></div>
@@ -80,21 +81,51 @@
           </div>
         </section>
 
-        <section class="section-block incidents-section" aria-labelledby="historyIncidentsTitle">
+        <section class="section-block incidents-section" id="publicArchive" aria-labelledby="historyIncidentsTitle">
           <div class="section-heading">
-            <div><p class="section-label">INCIDENTS</p><h2 id="historyIncidentsTitle">障害・メンテナンス記録</h2></div>
-            <p>公開されている障害やメンテナンス情報を、新しいものから表示します。</p>
+            <div><p class="section-label">PUBLIC ARCHIVE</p><h2 id="historyIncidentsTitle">公開情報アーカイブ</h2></div>
+            <p>Incident / Maintenance / Announcementを公開履歴として確認できます。監視データの30日保持とは独立しています。</p>
           </div>
-          <div class="incident-list" id="historyIncidentList" aria-live="polite">
-            <div class="empty-state"><span class="empty-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></span><div><strong>履歴を取得しています</strong><p>公開情報を読み込んでいます。</p></div></div>
+          <div class="portal-archive-controls" aria-label="公開履歴の絞り込み">
+            <div class="portal-filter-field">
+              <label for="archiveTypeFilter">種類</label>
+              <select id="archiveTypeFilter">
+                <option value="all">すべて</option>
+                <option value="incident">Incident</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="announcement">Announcement</option>
+              </select>
+            </div>
+            <div class="portal-filter-field">
+              <label for="archiveStatusFilter">状態</label>
+              <select id="archiveStatusFilter"><option value="all">すべて</option></select>
+            </div>
+            <div class="portal-filter-field">
+              <label for="archiveServiceFilter">サービス</label>
+              <select id="archiveServiceFilter"><option value="all">すべて</option></select>
+            </div>
+            <div class="portal-filter-field">
+              <label for="archiveFromDate">開始日</label>
+              <input id="archiveFromDate" type="date" />
+            </div>
+            <div class="portal-filter-field">
+              <label for="archiveToDate">終了日</label>
+              <input id="archiveToDate" type="date" />
+            </div>
           </div>
+          <p class="portal-archive-summary" id="archiveResultCount" aria-live="polite">取得中</p>
+          <div class="portal-record-list" id="publicArchiveList" aria-live="polite">
+            <div class="portal-archive-empty">公開情報を取得しています。</div>
+          </div>
+          <div id="historyIncidentList" hidden aria-hidden="true"></div>
         </section>
       </main>
 
       <footer class="site-footer"><div><strong>ivRooom Status</strong><span>公式サービスステータス</span></div><p id="footerTimestamp">Updated --</p></footer>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="/assets/api-fetch-guard.js?v=20260801-2"></script>
-    <script type="module" src="/assets/history.js"></script>
+    <script src="/assets/api-fetch-guard.js?v=20260830-1"></script>
+    <script type="module" src="/assets/history.js?v=20260830-1"></script>
+    <script type="module" src="/assets/history-portal.js?v=20260830-1"></script>
   </body>
 </html>
