@@ -153,14 +153,6 @@ export function installTimelineInteractionGuard(doc = globalThis.document) {
   if (!doc || doc.documentElement?.dataset.portalTimelineGuard === "true") return;
   if (doc.documentElement) doc.documentElement.dataset.portalTimelineGuard = "true";
 
-  doc.addEventListener("click", (event) => {
-    const button = event.target?.closest?.("button.uptime-bar[data-portal-ready='true']");
-    if (!button || button.getAttribute("aria-expanded") !== "true") return;
-    const popover = doc.getElementById("timelinePopover");
-    if (!popover || popover.hidden) return;
-    event.stopImmediatePropagation();
-  }, true);
-
   doc.addEventListener("keydown", (event) => {
     const button = event.target?.closest?.("button.uptime-bar[data-portal-ready='true']");
     if (!button || !["Enter", " "].includes(event.key)) return;
