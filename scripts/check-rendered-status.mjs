@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 const targetUrl = process.argv[2] || "https://status.ivrm.jp/";
+const target = new URL(targetUrl);
+const isLocalFixture = ["127.0.0.1", "localhost"].includes(target.hostname);
 const outputDir = process.env.OUTPUT_DIR || "/tmp/ivrm-status-browser";
 await mkdir(outputDir, { recursive: true });
 
@@ -17,7 +19,7 @@ async function findBrowser() {
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function fetchWithRetry(url, attempts = 50) {
+async function fetchWithRetry(url, attempts = 75) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -32,14 +34,26 @@ async function fetchWithRetry(url, attempts = 50) {
 
 const browserPath = await findBrowser();
 const profileDir = await mkdtemp(path.join(os.tmpdir(), "ivrm-status-chrome-"));
-const port = 9200 + Math.floor(Math.random() * 500);
+const port = 9222;
 const chromeLog = [];
+let chromeExit = null;
 const chrome = spawn(browserPath, [
-  "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-default-apps",
-  "--disable-extensions", "--disable-sync", "--no-first-run", `--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, "about:blank",
+  "--headless",
+  "--no-sandbox",
+  "--disable-gpu",
+  "--disable-dev-shm-usage",
+  "--disable-default-apps",
+  "--disable-extensions",
+  "--disable-sync",
+  "--no-first-run",
+  "--remote-debugging-address=127.0.0.1",
+  `--remote-debugging-port=${port}`,
+  `--user-data-dir=${profileDir}`,
+  "about:blank",
 ], { stdio: ["ignore", "ignore", "pipe"] });
 chrome.stderr.setEncoding("utf8");
 chrome.stderr.on("data", (chunk) => chromeLog.push(chunk));
+chrome.once("exit", (code, signal) => { chromeExit = { code, signal }; });
 
 let socket;
 const pending = new Map();
@@ -68,6 +82,21 @@ async function evaluate(expression, { awaitPromise = false } = {}) {
   return result.result.value;
 }
 
+async function connectToDevTools() {
+  try {
+    const versionResponse = await fetchWithRetry(`http://127.0.0.1:${port}/json/version`);
+    const version = await versionResponse.json();
+    const targetsResponse = await fetchWithRetry(`http://127.0.0.1:${port}/json/list`);
+    const targets = await targetsResponse.json();
+    const pageTarget = targets.find((item) => item.type === "page");
+    if (!pageTarget?.webSocketDebuggerUrl) throw new Error("Chrome page target was not found");
+    return { version, pageTarget };
+  } catch (error) {
+    const stderr = chromeLog.join("").slice(-6000);
+    throw new Error(`Chrome DevTools did not start (${browserPath}, exit=${JSON.stringify(chromeExit)}): ${error.message}\n${stderr}`);
+  }
+}
+
 try {
   const sourceResponse = await fetch(`${targetUrl}?source_check=${Date.now()}`, { signal: AbortSignal.timeout(20000) });
   await writeFile(path.join(outputDir, "source.html"), await sourceResponse.text(), "utf8");
@@ -81,12 +110,7 @@ try {
   const apiData = JSON.parse(apiText);
   if (!Array.isArray(apiData.services)) throw new Error("Status API did not return services");
 
-  const versionResponse = await fetchWithRetry(`http://127.0.0.1:${port}/json/version`);
-  const version = await versionResponse.json();
-  const targetsResponse = await fetchWithRetry(`http://127.0.0.1:${port}/json/list`);
-  const targets = await targetsResponse.json();
-  const pageTarget = targets.find((target) => target.type === "page");
-  if (!pageTarget?.webSocketDebuggerUrl) throw new Error("Chrome page target was not found");
+  const { version, pageTarget } = await connectToDevTools();
 
   socket = new WebSocket(pageTarget.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -141,35 +165,41 @@ try {
     };
   })()`);
 
-  const interactionState = await evaluate(`(async () => {
-    const buttons = [...document.querySelectorAll("button.uptime-bar[data-portal-ready='true']")];
-    const related = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開Incident"));
-    const noCause = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開された原因情報はありません"));
-    if (!related || !noCause) return { missingButtons: true };
+  const desktopShot = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+  await writeFile(path.join(outputDir, "desktop.png"), Buffer.from(desktopShot.data, "base64"));
 
-    related.focus();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const focusOpened = !document.getElementById("timelinePopover")?.hidden;
-    const relatedText = document.getElementById("timelinePopover")?.textContent || "";
+  let interactionState = { skipped: true };
+  if (isLocalFixture) {
+    interactionState = await evaluate(`(async () => {
+      const buttons = [...document.querySelectorAll("button.uptime-bar[data-portal-ready='true']")];
+      const related = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開Incident"));
+      const noCause = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開された原因情報はありません"));
+      if (!related || !noCause) return { missingButtons: true };
 
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    const escapeClosed = document.getElementById("timelinePopover")?.hidden === true;
+      related.focus();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const focusOpened = !document.getElementById("timelinePopover")?.hidden;
+      const relatedText = document.getElementById("timelinePopover")?.textContent || "";
 
-    noCause.click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const tapOpened = !document.getElementById("timelinePopover")?.hidden;
-    const noCauseText = document.getElementById("timelinePopover")?.textContent || "";
-    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    const outsideClosed = document.getElementById("timelinePopover")?.hidden === true;
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      const escapeClosed = document.getElementById("timelinePopover")?.hidden === true;
 
-    let copied = null;
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value) => { copied = value; } } });
-    const copyButton = document.querySelector("[data-portal-copy-url]");
-    copyButton?.click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+      noCause.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const tapOpened = !document.getElementById("timelinePopover")?.hidden;
+      const noCauseText = document.getElementById("timelinePopover")?.textContent || "";
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      const outsideClosed = document.getElementById("timelinePopover")?.hidden === true;
 
-    return { focusOpened, relatedText, escapeClosed, tapOpened, noCauseText, outsideClosed, copied, missingButtons: false };
-  })()`, { awaitPromise: true });
+      let copied = null;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value) => { copied = value; } } });
+      const copyButton = document.querySelector("[data-portal-copy-url]");
+      copyButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      return { focusOpened, relatedText, escapeClosed, tapOpened, noCauseText, outsideClosed, copied, missingButtons: false, skipped: false };
+    })()`, { awaitPromise: true });
+  }
 
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await sleep(150);
@@ -180,8 +210,9 @@ try {
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   const reducedMotion = await evaluate(`matchMedia("(prefers-reduced-motion: reduce)").matches`);
 
-  const origin = new URL(targetUrl).origin;
-  await send("Page.navigate", { url: `${origin}/history/?incident=INC-ABCDEF123456` });
+  const origin = target.origin;
+  const historyUrl = isLocalFixture ? `${origin}/history/?incident=INC-ABCDEF123456` : `${origin}/history/`;
+  await send("Page.navigate", { url: historyUrl });
   await sleep(3500);
   const historyState = await evaluate(`(() => ({
     archivePresent: Boolean(document.getElementById("publicArchive")),
@@ -193,7 +224,20 @@ try {
     viewportWidth: innerWidth,
   }))()`);
 
-  const diagnostic = { browser: version.Browser, apiServices: apiData.services.length, apiOverallStatus: apiData.overall_status, pageState, interactionState, mobileState, reducedMotion, historyState, exceptions: events.exceptions.length, loadingFailed: events.loadingFailed.length };
+  const diagnostic = {
+    browser: version.Browser,
+    browserPath,
+    isLocalFixture,
+    apiServices: apiData.services.length,
+    apiOverallStatus: apiData.overall_status,
+    pageState,
+    interactionState,
+    mobileState,
+    reducedMotion,
+    historyState,
+    exceptions: events.exceptions.length,
+    loadingFailed: events.loadingFailed.length,
+  };
   await writeFile(path.join(outputDir, "page-state.json"), JSON.stringify(diagnostic, null, 2), "utf8");
   await writeFile(path.join(outputDir, "browser-events.json"), JSON.stringify(events, null, 2), "utf8");
   console.log(JSON.stringify(diagnostic, null, 2));
@@ -202,14 +246,20 @@ try {
   if (!pageState.overallTitle || pageState.overallTitle === "サービス状況を確認しています") throw new Error("Rendered page did not leave loading state");
   if (pageState.timelineButtons < 24) throw new Error(`Timeline buttons were not enhanced: ${pageState.timelineButtons}`);
   if (pageState.xssImageCount !== 0) throw new Error("Untrusted public content created an executable image element");
-  if (!interactionState.focusOpened || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard timeline popover did not render related Incident details");
-  if (!interactionState.escapeClosed) throw new Error("Escape did not close timeline popover");
-  if (!interactionState.tapOpened || !interactionState.noCauseText.includes("公開された原因情報はありません")) throw new Error("Tap/no-related-Incident popover behavior failed");
-  if (!interactionState.outsideClosed) throw new Error("Outside click did not close timeline popover");
-  if (!String(interactionState.copied || "").includes("?")) throw new Error("Clipboard URL copy did not execute");
+
+  if (isLocalFixture) {
+    if (interactionState.missingButtons) throw new Error("Fixture timeline buttons were not found");
+    if (!interactionState.focusOpened || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard timeline popover did not render related Incident details");
+    if (!interactionState.escapeClosed) throw new Error("Escape did not close timeline popover");
+    if (!interactionState.tapOpened || !interactionState.noCauseText.includes("公開された原因情報はありません")) throw new Error("Tap/no-related-Incident popover behavior failed");
+    if (!interactionState.outsideClosed) throw new Error("Outside click did not close timeline popover");
+    if (!String(interactionState.copied || "").includes("?")) throw new Error("Clipboard URL copy did not execute");
+  }
+
   if (mobileState.bodyScrollWidth > mobileState.viewportWidth) throw new Error(`Mobile layout overflowed: ${JSON.stringify(mobileState)}`);
   if (!reducedMotion) throw new Error("Reduced motion emulation was not applied");
-  if (!historyState.archivePresent || !historyState.filters || !historyState.deepLinked || !historyState.serviceHistoryPresent) throw new Error(`History archive/deep-link regression: ${JSON.stringify(historyState)}`);
+  if (!historyState.archivePresent || !historyState.filters || !historyState.serviceHistoryPresent) throw new Error(`History archive regression: ${JSON.stringify(historyState)}`);
+  if (isLocalFixture && !historyState.deepLinked) throw new Error(`History deep-link regression: ${JSON.stringify(historyState)}`);
   if (historyState.bodyScrollWidth > historyState.viewportWidth) throw new Error(`History mobile layout overflowed: ${JSON.stringify(historyState)}`);
   if (events.exceptions.length > 0) throw new Error(`Browser reported ${events.exceptions.length} uncaught JavaScript exception(s)`);
 
