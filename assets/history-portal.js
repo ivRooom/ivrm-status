@@ -11,6 +11,7 @@ import {
 } from "./status-portal-core.js";
 
 const API_PATH = "/api/status.json";
+const REQUEST_TIMEOUT_MS = 8_000;
 const $ = (id) => document.getElementById(id);
 
 const STATUS_COPY = {
@@ -26,12 +27,22 @@ const STATUS_COPY = {
   warning: "重要なお知らせ",
 };
 
+const IMPACT_LABEL = {
+  none: "影響なし",
+  minor: "軽微",
+  major: "大きな影響",
+  critical: "重大",
+};
+
 let snapshot = null;
 let records = [];
 let deepLinkHandled = false;
+let archiveRefreshInFlight = false;
 
 function formatDateTime(value) {
-  const date = new Date(value || 0);
+  const raw = safeText(value);
+  if (!raw) return "--";
+  const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return "--";
   return new Intl.DateTimeFormat("ja-JP", {
     year: "numeric",
@@ -147,7 +158,8 @@ function renderRecord(record) {
   if (type === "incident") {
     addMeta(meta, "発生", formatDateTime(record.started_at));
     if (record.resolved_at) addMeta(meta, "復旧", formatDateTime(record.resolved_at));
-    addMeta(meta, "影響", safeText(record.impact, "不明"));
+    const impact = safeText(record.impact).toLowerCase();
+    addMeta(meta, "影響", IMPACT_LABEL[impact] || safeText(record.impact, "不明"));
   } else if (type === "maintenance") {
     addMeta(meta, "開始", formatDateTime(record.starts_at));
     addMeta(meta, "終了", formatDateTime(record.ends_at));
@@ -190,7 +202,8 @@ function renderArchive() {
   if (!list) return;
   const filtered = filterArchiveRecords(records, currentFilters());
   list.replaceChildren();
-  $("archiveResultCount").textContent = `${filtered.length}件 / 全${records.length}件`;
+  const count = $("archiveResultCount");
+  if (count) count.textContent = `${filtered.length}件 / 全${records.length}件`;
 
   if (!filtered.length) {
     list.append(textElement("div", "portal-archive-empty", records.length ? "条件に一致する公開情報はありません。" : "公開済みのIncident / Maintenance / Announcementはありません。"));
@@ -237,11 +250,16 @@ function handleDeepLink() {
     showToast("指定された公開情報は見つかりませんでした");
     return;
   }
-  $("archiveTypeFilter").value = publicRecordType(record);
-  $("archiveStatusFilter").value = "all";
-  $("archiveServiceFilter").value = "all";
-  $("archiveFromDate").value = "";
-  $("archiveToDate").value = "";
+  const typeFilter = $("archiveTypeFilter");
+  const statusFilter = $("archiveStatusFilter");
+  const serviceFilter = $("archiveServiceFilter");
+  const fromDate = $("archiveFromDate");
+  const toDate = $("archiveToDate");
+  if (typeFilter) typeFilter.value = publicRecordType(record);
+  if (statusFilter) statusFilter.value = "all";
+  if (serviceFilter) serviceFilter.value = "all";
+  if (fromDate) fromDate.value = "";
+  if (toDate) toDate.value = "";
   renderArchive();
   const target = document.getElementById(`public-${deepLink.id}`);
   if (!target) return;
@@ -251,8 +269,16 @@ function handleDeepLink() {
 }
 
 async function loadArchive({ announce = false } = {}) {
+  if (archiveRefreshInFlight) return;
+  archiveRefreshInFlight = true;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(`${API_PATH}?archive=${Date.now()}`, { cache: "no-store", headers: { Accept: "application/json" } });
+    const response = await fetch(`${API_PATH}?archive=${Date.now()}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     if (!data || !Array.isArray(data.services)) throw new Error("invalid response");
@@ -267,6 +293,9 @@ async function loadArchive({ announce = false } = {}) {
     const list = $("publicArchiveList");
     list?.replaceChildren(textElement("div", "portal-archive-empty", "公開履歴を取得できませんでした。現在のサービス稼働履歴は上部で確認できます。"));
     if (announce) showToast("公開履歴の取得に失敗しました");
+  } finally {
+    window.clearTimeout(timeout);
+    archiveRefreshInFlight = false;
   }
 }
 
