@@ -48,6 +48,8 @@ def settings(tmp_path: Path) -> Settings:
         minecraft_stale_after_seconds=10_000_000,
         minecraft_current_path=current,
         minecraft_history_path=history,
+        public_content_feed_url=None,
+        public_content_cache_path=tmp_path / "public-status-content.json",
         enable_docs=False,
     )
 

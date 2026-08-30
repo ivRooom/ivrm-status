@@ -50,6 +50,11 @@ class Settings:
     minecraft_probe_port: int = 25_565
     minecraft_probe_timeout_seconds: float = 2.0
     minecraft_probe_cache_seconds: int = 15
+    public_content_feed_url: str | None = "https://console.ivrm.jp/api/public/status-feed"
+    public_content_cache_path: Path = Path("/data/public-status-content.json")
+    public_content_timeout_seconds: float = 1.5
+    public_content_refresh_seconds: int = 30
+    public_content_stale_seconds: int = 600
     enable_docs: bool = False
 
     @classmethod
@@ -57,6 +62,10 @@ class Settings:
         probe_host = os.getenv(
             "MINECRAFT_PROBE_CONNECT_HOST",
             "host.docker.internal",
+        ).strip()
+        content_feed_url = os.getenv(
+            "STATUS_PUBLIC_CONTENT_FEED_URL",
+            "https://console.ivrm.jp/api/public/status-feed",
         ).strip()
         return cls(
             db_path=Path(os.getenv("STATUS_DB_PATH", "/data/status.db")),
@@ -88,6 +97,25 @@ class Settings:
             minecraft_probe_cache_seconds=_env_int(
                 "MINECRAFT_PROBE_CACHE_SECONDS",
                 15,
+            ),
+            public_content_feed_url=content_feed_url or None,
+            public_content_cache_path=Path(
+                os.getenv(
+                    "STATUS_PUBLIC_CONTENT_CACHE_PATH",
+                    "/data/public-status-content.json",
+                )
+            ),
+            public_content_timeout_seconds=_env_float(
+                "STATUS_PUBLIC_CONTENT_TIMEOUT_SECONDS",
+                1.5,
+            ),
+            public_content_refresh_seconds=_env_int(
+                "STATUS_PUBLIC_CONTENT_REFRESH_SECONDS",
+                30,
+            ),
+            public_content_stale_seconds=_env_int(
+                "STATUS_PUBLIC_CONTENT_STALE_SECONDS",
+                600,
             ),
             enable_docs=_env_bool("STATUS_ENABLE_DOCS", False),
         )

@@ -30,6 +30,37 @@ def worst_status(values: list[PublicStatus]) -> PublicStatus:
     return max(values, key=lambda status: STATUS_PRIORITY[status])
 
 
+class IncidentLifecycle(StrEnum):
+    INVESTIGATING = "investigating"
+    IDENTIFIED = "identified"
+    MONITORING = "monitoring"
+    RESOLVED = "resolved"
+
+
+class IncidentImpact(StrEnum):
+    NONE = "none"
+    MINOR = "minor"
+    MAJOR = "major"
+    CRITICAL = "critical"
+
+
+class IncidentSource(StrEnum):
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
+
+
+class MaintenanceState(StrEnum):
+    SCHEDULED = "scheduled"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class AnnouncementKind(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+
+
 class IngestService(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -74,6 +105,81 @@ class IngestPayload(BaseModel):
         return self
 
 
+class PublicIncidentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: IncidentLifecycle
+    message: str = Field(min_length=1, max_length=2_000)
+    published_at: datetime
+
+
+class PublicIncident(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_id: str = Field(pattern=r"^INC-[A-F0-9]{12}$")
+    title: str = Field(min_length=1, max_length=160)
+    status: IncidentLifecycle
+    impact: IncidentImpact
+    affected_service_ids: list[str] = Field(max_length=32)
+    started_at: datetime
+    resolved_at: datetime | None = None
+    updated_at: datetime
+    summary: str = Field(min_length=1, max_length=2_000)
+    source: IncidentSource
+    updates: list[PublicIncidentUpdate] = Field(default_factory=list, max_length=500)
+
+    @field_validator("affected_service_ids")
+    @classmethod
+    def validate_service_ids(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("affected_service_ids must be unique")
+        for service_id in value:
+            if not service_id or len(service_id) > 64:
+                raise ValueError("affected service id is invalid")
+            if not service_id[0].isalnum() or not all(
+                character.islower() or character.isdigit() or character == "-"
+                for character in service_id
+            ):
+                raise ValueError("affected service id is invalid")
+        return value
+
+
+class PublicMaintenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_id: str = Field(pattern=r"^MNT-[A-F0-9]{12}$")
+    title: str = Field(min_length=1, max_length=160)
+    summary: str = Field(min_length=1, max_length=4_000)
+    affected_service_ids: list[str] = Field(max_length=32)
+    starts_at: datetime
+    ends_at: datetime
+    state: MaintenanceState
+    updated_at: datetime
+
+
+class PublicAnnouncement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_id: str = Field(pattern=r"^ANN-[A-F0-9]{12}$")
+    kind: AnnouncementKind
+    title: str = Field(min_length=1, max_length=160)
+    body: str = Field(min_length=1, max_length=4_000)
+    affected_service_ids: list[str] = Field(default_factory=list, max_length=32)
+    published_at: datetime
+    expires_at: datetime | None = None
+    active: bool
+
+
+class PublicTimelineBucket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_at: datetime
+    end_at: datetime
+    status: PublicStatus
+    related_incident_ids: list[str] = Field(default_factory=list, max_length=32)
+    summary: str | None = Field(default=None, max_length=2_000)
+
+
 class PublicService(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,7 +191,17 @@ class PublicService(BaseModel):
     checked_at: datetime | None = None
     last_received_at: datetime | None = None
     timeline: list[PublicStatus]
+    timeline_details: list[PublicTimelineBucket] = Field(default_factory=list)
     meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublicContentMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(pattern=r"^(live|cache|none)$")
+    generated_at: datetime | None = None
+    fetched_at: datetime | None = None
+    stale: bool = False
 
 
 class PublicStatusResponse(BaseModel):
@@ -94,7 +210,12 @@ class PublicStatusResponse(BaseModel):
     generated_at: datetime
     overall_status: PublicStatus
     services: list[PublicService]
-    incidents: list[dict[str, Any]] = Field(default_factory=list)
+    incidents: list[PublicIncident] = Field(default_factory=list)
+    maintenance: list[PublicMaintenance] = Field(default_factory=list)
+    announcements: list[PublicAnnouncement] = Field(default_factory=list)
+    content_meta: PublicContentMeta = Field(
+        default_factory=lambda: PublicContentMeta(source="none")
+    )
 
 
 class PublicHistoryDay(BaseModel):
@@ -132,4 +253,9 @@ class PublicHistoryResponse(BaseModel):
     generated_at: datetime
     range: PublicHistoryRange
     services: list[PublicHistoryService]
-    incidents: list[dict[str, Any]] = Field(default_factory=list)
+    incidents: list[PublicIncident] = Field(default_factory=list)
+    maintenance: list[PublicMaintenance] = Field(default_factory=list)
+    announcements: list[PublicAnnouncement] = Field(default_factory=list)
+    content_meta: PublicContentMeta = Field(
+        default_factory=lambda: PublicContentMeta(source="none")
+    )
