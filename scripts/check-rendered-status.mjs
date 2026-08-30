@@ -183,8 +183,25 @@ try {
       const focusOpened = !document.getElementById("timelinePopover")?.hidden;
       const relatedText = document.getElementById("timelinePopover")?.textContent || "";
 
+      related.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const keyboardActivationKeptOpen = !document.getElementById("timelinePopover")?.hidden;
+
+      const escapeClose = document.querySelector("#timelinePopover .timeline-popover-close");
+      escapeClose?.focus();
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
       const escapeClosed = document.getElementById("timelinePopover")?.hidden === true;
+      const escapeRestoredFocus = document.activeElement === related;
+
+      related.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const closeButton = document.querySelector("#timelinePopover .timeline-popover-close");
+      closeButton?.focus();
+      closeButton?.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const closeButtonClosed = document.getElementById("timelinePopover")?.hidden === true;
+      const closeButtonRestoredFocus = document.activeElement === related;
 
       noCause.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -199,8 +216,35 @@ try {
       copyButton?.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      return { focusOpened, relatedText, escapeClosed, tapOpened, noCauseText, outsideClosed, copied, missingButtons: false, skipped: false };
+      return {
+        focusOpened,
+        relatedText,
+        keyboardActivationKeptOpen,
+        escapeClosed,
+        escapeRestoredFocus,
+        closeButtonClosed,
+        closeButtonRestoredFocus,
+        tapOpened,
+        noCauseText,
+        outsideClosed,
+        copied,
+        missingButtons: false,
+        skipped: false,
+      };
     })()`, { awaitPromise: true });
+  }
+
+  const origin = target.origin;
+  let durableDeepLinkState = { skipped: true };
+  if (isLocalFixture) {
+    await send("Page.navigate", { url: `${origin}/?notice=MNT-DEFABC123456` });
+    await sleep(3500);
+    durableDeepLinkState = await evaluate(`(() => ({
+      sectionVisible: document.getElementById("deepLinkedPublicRecord")?.hidden === false,
+      deepLinked: Boolean(document.getElementById("public-MNT-DEFABC123456")?.classList.contains("is-deep-linked")),
+      text: document.getElementById("deepLinkedPublicRecord")?.textContent || "",
+      skipped: false,
+    }))()`);
   }
 
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
@@ -212,15 +256,15 @@ try {
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
   const reducedMotion = await evaluate(`matchMedia("(prefers-reduced-motion: reduce)").matches`);
 
-  const origin = target.origin;
-  const historyUrl = isLocalFixture ? `${origin}/history/?incident=INC-ABCDEF123456` : `${origin}/history/`;
+  const historyUrl = isLocalFixture ? `${origin}/history/?notice=MNT-DEFABC123456` : `${origin}/history/`;
   await send("Page.navigate", { url: historyUrl });
   await sleep(3500);
   const historyState = await evaluate(`(() => ({
     archivePresent: Boolean(document.getElementById("publicArchive")),
     filters: ["archiveTypeFilter", "archiveStatusFilter", "archiveServiceFilter", "archiveFromDate", "archiveToDate"].every((id) => Boolean(document.getElementById(id))),
     resultCount: document.getElementById("archiveResultCount")?.textContent?.trim() || null,
-    deepLinked: Boolean(document.getElementById("public-INC-ABCDEF123456")?.classList.contains("is-deep-linked")),
+    deepLinked: Boolean(document.getElementById("public-MNT-DEFABC123456")?.classList.contains("is-deep-linked")),
+    oldMaintenanceText: document.getElementById("public-MNT-DEFABC123456")?.textContent || "",
     serviceHistoryPresent: Boolean(document.getElementById("historyServiceList")),
     bodyScrollWidth: document.body.scrollWidth,
     viewportWidth: innerWidth,
@@ -234,6 +278,7 @@ try {
     apiOverallStatus: apiData.overall_status,
     pageState,
     interactionState,
+    durableDeepLinkState,
     mobileState,
     reducedMotion,
     historyState,
@@ -252,16 +297,19 @@ try {
   if (isLocalFixture) {
     if (interactionState.missingButtons) throw new Error("Fixture timeline buttons were not found");
     if (!interactionState.focusOpened || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard timeline popover did not render related Incident details");
-    if (!interactionState.escapeClosed) throw new Error("Escape did not close timeline popover");
+    if (!interactionState.keyboardActivationKeptOpen) throw new Error("Keyboard activation unexpectedly closed the timeline popover");
+    if (!interactionState.escapeClosed || !interactionState.escapeRestoredFocus) throw new Error("Escape did not close the timeline popover and restore focus safely");
+    if (!interactionState.closeButtonClosed || !interactionState.closeButtonRestoredFocus) throw new Error("Popover close button did not close and restore focus safely");
     if (!interactionState.tapOpened || !interactionState.noCauseText.includes("公開された原因情報はありません")) throw new Error("Tap/no-related-Incident popover behavior failed");
     if (!interactionState.outsideClosed) throw new Error("Outside click did not close timeline popover");
     if (!String(interactionState.copied || "").includes("?")) throw new Error("Clipboard URL copy did not execute");
+    if (!durableDeepLinkState.sectionVisible || !durableDeepLinkState.deepLinked || !durableDeepLinkState.text.includes("過去のメンテナンス")) throw new Error(`Home durable deep-link regression: ${JSON.stringify(durableDeepLinkState)}`);
   }
 
   if (mobileState.bodyScrollWidth > mobileState.viewportWidth) throw new Error(`Mobile layout overflowed: ${JSON.stringify(mobileState)}`);
   if (!reducedMotion) throw new Error("Reduced motion emulation was not applied");
   if (!historyState.archivePresent || !historyState.filters || !historyState.serviceHistoryPresent) throw new Error(`History archive regression: ${JSON.stringify(historyState)}`);
-  if (isLocalFixture && !historyState.deepLinked) throw new Error(`History deep-link regression: ${JSON.stringify(historyState)}`);
+  if (isLocalFixture && (!historyState.deepLinked || !historyState.oldMaintenanceText.includes("過去のメンテナンス"))) throw new Error(`Retention-independent History deep-link regression: ${JSON.stringify(historyState)}`);
   if (historyState.bodyScrollWidth > historyState.viewportWidth) throw new Error(`History mobile layout overflowed: ${JSON.stringify(historyState)}`);
   if (events.exceptions.length > 0) throw new Error(`Browser reported ${events.exceptions.length} uncaught JavaScript exception(s)`);
 
