@@ -178,14 +178,15 @@ try {
       const noCause = lastTimelineButton(rowByName("Herta"));
       if (!related || !noCause) return { missingButtons: true };
 
+      const relatedAriaLabel = related.getAttribute("aria-label") || "";
       related.focus();
       await new Promise((resolve) => setTimeout(resolve, 20));
       const focusOpened = !document.getElementById("timelinePopover")?.hidden;
-      const relatedText = document.getElementById("timelinePopover")?.textContent || "";
 
       related.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
       const keyboardActivationKeptOpen = !document.getElementById("timelinePopover")?.hidden;
+      const relatedText = document.getElementById("timelinePopover")?.textContent || "";
 
       const escapeClose = document.querySelector("#timelinePopover .timeline-popover-close");
       escapeClose?.focus();
@@ -203,6 +204,11 @@ try {
       const closeButtonClosed = document.getElementById("timelinePopover")?.hidden === true;
       const closeButtonRestoredFocus = document.activeElement === related;
 
+      noCause.focus();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const focusSwitchOpened = !document.getElementById("timelinePopover")?.hidden;
+      const focusSwitchText = document.getElementById("timelinePopover")?.textContent || "";
+
       noCause.click();
       await new Promise((resolve) => setTimeout(resolve, 20));
       const tapOpened = !document.getElementById("timelinePopover")?.hidden;
@@ -218,12 +224,15 @@ try {
 
       return {
         focusOpened,
+        relatedAriaLabel,
         relatedText,
         keyboardActivationKeptOpen,
         escapeClosed,
         escapeRestoredFocus,
         closeButtonClosed,
         closeButtonRestoredFocus,
+        focusSwitchOpened,
+        focusSwitchText,
         tapOpened,
         noCauseText,
         outsideClosed,
@@ -296,10 +305,12 @@ try {
 
   if (isLocalFixture) {
     if (interactionState.missingButtons) throw new Error("Fixture timeline buttons were not found");
-    if (!interactionState.focusOpened || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard timeline popover did not render related Incident details");
-    if (!interactionState.keyboardActivationKeptOpen) throw new Error("Keyboard activation unexpectedly closed the timeline popover");
+    if (!interactionState.relatedAriaLabel.includes("公開済みの接続障害情報")) throw new Error(`Related timeline bucket was not selected: ${JSON.stringify(interactionState.relatedAriaLabel)}`);
+    if (!interactionState.focusOpened) throw new Error("Keyboard focus did not open the timeline popover");
+    if (!interactionState.keyboardActivationKeptOpen || !interactionState.relatedText.includes("Incident詳細を見る")) throw new Error("Keyboard activation did not keep related Incident details open");
     if (!interactionState.escapeClosed || !interactionState.escapeRestoredFocus) throw new Error("Escape did not close the timeline popover and restore focus safely");
     if (!interactionState.closeButtonClosed || !interactionState.closeButtonRestoredFocus) throw new Error("Popover close button did not close and restore focus safely");
+    if (!interactionState.focusSwitchOpened || !interactionState.focusSwitchText.includes("公開された原因情報はありません")) throw new Error("Keyboard focus switch did not keep the new timeline popover open");
     if (!interactionState.tapOpened || !interactionState.noCauseText.includes("公開された原因情報はありません")) throw new Error("Tap/no-related-Incident popover behavior failed");
     if (!interactionState.outsideClosed) throw new Error("Outside click did not close timeline popover");
     if (!String(interactionState.copied || "").includes("?")) throw new Error("Clipboard URL copy did not execute");
