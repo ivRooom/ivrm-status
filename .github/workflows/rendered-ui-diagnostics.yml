@@ -8,6 +8,7 @@ on:
       - "assets/**"
       - "api/**"
       - "scripts/test-minecraft-observer.mjs"
+      - "scripts/test-status-portal-core.mjs"
       - "scripts/check-rendered-status.mjs"
       - ".github/workflows/rendered-ui-diagnostics.yml"
   workflow_dispatch:
@@ -34,9 +35,16 @@ jobs:
         run: |
           node --check assets/minecraft-servers.js
           node --check scripts/test-minecraft-observer.mjs
+          node --check assets/status-presentation.js
+          node --check assets/status-portal-core.js
+          node --check assets/history-portal.js
+          node --check scripts/test-status-portal-core.mjs
 
       - name: Test Minecraft observer
         run: node scripts/test-minecraft-observer.mjs
+
+      - name: Test Status Portal helpers
+        run: node scripts/test-status-portal-core.mjs
 
   pull-request-rendered-ui:
     if: ${{ github.event_name == 'pull_request' }}
@@ -50,38 +58,152 @@ jobs:
       - name: Verify diagnostic syntax
         run: node --check scripts/check-rendered-status.mjs
 
-      - name: Create local Status API fixture
+      - name: Create local Status API fixtures
         run: |
           mkdir -p api
           cat > api/status.json <<'JSON'
           {
-            "generatedAt": "2026-08-01T00:00:00Z",
-            "overallStatus": "operational",
+            "generated_at": "2026-08-30T07:30:00Z",
+            "overall_status": "degraded",
             "services": [
               {
                 "id": "minecraft-network",
                 "group": "ゲームサービス",
                 "name": "Minecraft Network",
                 "description": "生活鯖（mc-main）",
-                "status": "operational",
-                "timeline": ["operational"],
-                "meta": {
-                  "type": "minecraft",
-                  "connection": "mc.ivrm.jp",
-                  "playersOnline": 0,
-                  "playersMax": 10,
-                  "serverVersion": "26.1.2"
-                }
+                "status": "degraded",
+                "timeline": ["degraded"],
+                "timeline_details": [{
+                  "start_at": "2026-08-30T06:30:00Z",
+                  "end_at": "2026-08-30T07:30:00Z",
+                  "status": "degraded",
+                  "related_incident_ids": ["INC-ABCDEF123456"],
+                  "summary": "公開済みの接続障害情報"
+                }],
+                "meta": { "type": "minecraft", "connection": "mc.ivrm.jp", "playersOnline": 0, "playersMax": 10, "mode": "生活鯖" }
               },
               {
-                "id": "status-data",
-                "group": "プラットフォーム",
-                "name": "Status Data",
-                "description": "サービス状態を公開するデータフィード",
-                "status": "operational",
-                "timeline": ["operational"]
+                "id": "herta-discord-bot",
+                "group": "Discordサービス",
+                "name": "Herta",
+                "description": "Discord Bot",
+                "status": "degraded",
+                "timeline": ["degraded"],
+                "timeline_details": [{
+                  "start_at": "2026-08-30T06:30:00Z",
+                  "end_at": "2026-08-30T07:30:00Z",
+                  "status": "degraded",
+                  "related_incident_ids": [],
+                  "summary": null
+                }],
+                "meta": { "type": "discord_bot" }
               }
-            ]
+            ],
+            "incidents": [
+              {
+                "public_id": "INC-ABCDEF123456",
+                "title": "Minecraft Network 接続障害",
+                "status": "identified",
+                "impact": "major",
+                "affected_service_ids": ["minecraft-network"],
+                "started_at": "2026-08-30T06:40:00Z",
+                "resolved_at": null,
+                "updated_at": "2026-08-30T07:10:00Z",
+                "summary": "接続障害の原因を特定しました",
+                "source": "manual",
+                "updates": [
+                  { "status": "investigating", "message": "接続障害を調査しています", "published_at": "2026-08-30T06:40:00Z" },
+                  { "status": "identified", "message": "接続障害の原因を特定しました", "published_at": "2026-08-30T07:10:00Z" }
+                ]
+              },
+              {
+                "public_id": "INC-DEFABC123456",
+                "title": "復旧済みの軽微な障害",
+                "status": "resolved",
+                "impact": "minor",
+                "affected_service_ids": ["herta-discord-bot"],
+                "started_at": "2026-08-29T02:00:00Z",
+                "resolved_at": "2026-08-29T02:15:00Z",
+                "updated_at": "2026-08-29T02:15:00Z",
+                "summary": "復旧しました",
+                "source": "manual",
+                "updates": [{ "status": "resolved", "message": "復旧を確認しました", "published_at": "2026-08-29T02:15:00Z" }]
+              }
+            ],
+            "maintenance": [
+              {
+                "public_id": "MNT-ABCDEF123456",
+                "title": "Minecraft 定期メンテナンス",
+                "summary": "短時間の再起動を予定しています",
+                "affected_service_ids": ["minecraft-network"],
+                "starts_at": "2026-09-01T03:00:00Z",
+                "ends_at": "2026-09-01T04:00:00Z",
+                "state": "scheduled",
+                "updated_at": "2026-08-30T07:00:00Z"
+              },
+              {
+                "public_id": "MNT-DEFABC123456",
+                "title": "過去のメンテナンス",
+                "summary": "公開Archive保持確認用の完了済みメンテナンス",
+                "affected_service_ids": ["herta-discord-bot"],
+                "starts_at": "2026-06-01T03:00:00Z",
+                "ends_at": "2026-06-01T04:00:00Z",
+                "state": "completed",
+                "updated_at": "2026-06-01T04:00:00Z"
+              }
+            ],
+            "announcements": [{
+              "public_id": "ANN-ABCDEF123456",
+              "kind": "warning",
+              "title": "サービス運用のお知らせ",
+              "body": "公開本文はplain textとして表示されます",
+              "affected_service_ids": [],
+              "published_at": "2026-08-30T05:00:00Z",
+              "expires_at": "2026-09-03T05:00:00Z",
+              "active": true
+            }],
+            "content_meta": { "source": "live", "generated_at": "2026-08-30T07:29:50Z", "fetched_at": "2026-08-30T07:30:00Z", "stale": false }
+          }
+          JSON
+          cat > api/status-history.json <<'JSON'
+          {
+            "generated_at": "2026-08-30T07:30:00Z",
+            "range": { "days": 30, "from_date": "2026-08-01", "to_date": "2026-08-30" },
+            "services": [
+              {
+                "id": "minecraft-network", "group": "ゲームサービス", "name": "Minecraft Network", "description": "生活鯖（mc-main）",
+                "current_status": "degraded", "availability_percent": 99.5,
+                "days": [{ "date": "2026-08-30", "status": "degraded", "samples": 12, "availability_percent": 95.0 }]
+              },
+              {
+                "id": "herta-discord-bot", "group": "Discordサービス", "name": "Herta", "description": "Discord Bot",
+                "current_status": "degraded", "availability_percent": 99.8,
+                "days": [{ "date": "2026-08-30", "status": "degraded", "samples": 12, "availability_percent": 98.0 }]
+              }
+            ],
+            "incidents": [
+              {
+                "public_id": "INC-ABCDEF123456", "title": "Minecraft Network 接続障害", "status": "identified", "impact": "major",
+                "affected_service_ids": ["minecraft-network"], "started_at": "2026-08-30T06:40:00Z", "resolved_at": null,
+                "updated_at": "2026-08-30T07:10:00Z", "summary": "接続障害の原因を特定しました", "source": "manual",
+                "updates": [{ "status": "identified", "message": "接続障害の原因を特定しました", "published_at": "2026-08-30T07:10:00Z" }]
+              },
+              {
+                "public_id": "INC-DEFABC123456", "title": "復旧済みの軽微な障害", "status": "resolved", "impact": "minor",
+                "affected_service_ids": ["herta-discord-bot"], "started_at": "2026-08-29T02:00:00Z", "resolved_at": "2026-08-29T02:15:00Z",
+                "updated_at": "2026-08-29T02:15:00Z", "summary": "復旧しました", "source": "manual", "updates": []
+              }
+            ],
+            "maintenance": [{
+              "public_id": "MNT-ABCDEF123456", "title": "Minecraft 定期メンテナンス", "summary": "短時間の再起動を予定しています",
+              "affected_service_ids": ["minecraft-network"], "starts_at": "2026-09-01T03:00:00Z", "ends_at": "2026-09-01T04:00:00Z",
+              "state": "scheduled", "updated_at": "2026-08-30T07:00:00Z"
+            }],
+            "announcements": [{
+              "public_id": "ANN-ABCDEF123456", "kind": "warning", "title": "サービス運用のお知らせ", "body": "公開アーカイブ本文",
+              "affected_service_ids": [], "published_at": "2026-08-30T05:00:00Z", "expires_at": "2026-09-03T05:00:00Z", "active": true
+            }],
+            "content_meta": { "source": "live", "generated_at": "2026-08-30T07:29:50Z", "fetched_at": "2026-08-30T07:30:00Z", "stale": false }
           }
           JSON
 

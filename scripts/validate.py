@@ -18,10 +18,14 @@ REQUIRED_FILES = [
     ROOT / "assets" / "app.js",
     ROOT / "assets" / "history.css",
     ROOT / "assets" / "history.js",
+    ROOT / "assets" / "history-portal.js",
     ROOT / "assets" / "navigation.css",
     ROOT / "assets" / "status-presentation.js",
+    ROOT / "assets" / "status-portal-core.js",
+    ROOT / "assets" / "status-portal.css",
     ROOT / "assets" / "minecraft-servers.css",
     ROOT / "assets" / "minecraft-servers.js",
+    ROOT / "scripts" / "test-status-portal-core.mjs",
     ROOT / "deploy" / "status-api" / "collect-minecraft-runtime.py",
     ROOT / "deploy" / "status-api" / "ivrm-minecraft-runtime-collector.service",
     ROOT / "deploy" / "status-api" / "ivrm-minecraft-runtime-collector.timer",
@@ -84,9 +88,22 @@ if not errors:
             )
 
     index_html = (ROOT / "index.html").read_text(encoding="utf-8")
+    history_html = (ROOT / "history" / "index.html").read_text(encoding="utf-8")
     for required_id in ("minecraftServerList", "minecraftFeature"):
         if f'id="{required_id}"' not in index_html:
             errors.append(f"index.html must include #{required_id}")
+
+    for required_id in (
+        "publicArchive",
+        "archiveTypeFilter",
+        "archiveStatusFilter",
+        "archiveServiceFilter",
+        "archiveFromDate",
+        "archiveToDate",
+        "publicArchiveList",
+    ):
+        if f'id="{required_id}"' not in history_html:
+            errors.append(f"history/index.html must include #{required_id}")
 
     for path in HTML_FILES:
         relative = path.relative_to(ROOT)
@@ -111,6 +128,14 @@ if not errors:
     ):
         if asset not in index_html:
             errors.append(f"index.html must version {asset.split('?')[0]}")
+
+    for asset in (
+        "/assets/history.js?v=",
+        "/assets/history-portal.js?v=",
+        "/assets/status-portal.css?v=",
+    ):
+        if asset not in history_html:
+            errors.append(f"history/index.html must version {asset.split('?')[0]}")
 
 if errors:
     print("Validation failed:")

@@ -20,6 +20,13 @@ jobs:
         run: |
           python3 scripts/validate.py
           node --check assets/app.js
+          node --check assets/status-presentation.js
+          node --check assets/status-portal-core.js
+          node --check assets/history.js
+          node --check assets/history-portal.js
+
+      - name: Test Status Portal helpers
+        run: node scripts/test-status-portal-core.mjs
 
       - name: Verify deployment scripts
         run: |
