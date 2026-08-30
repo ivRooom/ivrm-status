@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   buildPublicRecordUrl,
   classifyPublicId,
@@ -94,5 +95,19 @@ const maintenanceUrl = buildPublicRecordUrl(maintenance, { origin: "https://stat
 assert.equal(incidentUrl, "https://status.ivrm.jp/?incident=INC-ABCDEF123456");
 assert.equal(maintenanceUrl, "https://status.ivrm.jp/history/?notice=MNT-ABCDEF123456");
 assert.equal(incidentUrl.includes("8d4a08e9"), false);
+
+const [homeSource, historySource] = await Promise.all([
+  readFile(new URL("../assets/status-presentation.js", import.meta.url), "utf8"),
+  readFile(new URL("../assets/history-portal.js", import.meta.url), "utf8"),
+]);
+for (const source of [homeSource, historySource]) {
+  assert.equal(source.includes(".innerHTML"), false, "public CMS rendering must not use innerHTML");
+  assert.equal(source.includes("textContent"), true, "public CMS rendering must use textContent");
+  assert.equal(source.includes('document.execCommand("copy")'), true, "clipboard fallback must remain available");
+  assert.equal(source.includes("navigator.share"), true, "Web Share support must remain available when supported");
+}
+assert.equal(homeSource.includes("公開された原因情報はありません"), true);
+assert.equal(homeSource.includes('event.key === "Escape"'), true);
+assert.equal(homeSource.includes('document.addEventListener("pointerdown"'), true);
 
 console.log("Status Portal core tests passed.");
