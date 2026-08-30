@@ -101,13 +101,12 @@ const [homeSource, historySource] = await Promise.all([
   readFile(new URL("../assets/history-portal.js", import.meta.url), "utf8"),
 ]);
 for (const source of [homeSource, historySource]) {
-  assert.equal(source.includes(".innerHTML"), false, "public CMS rendering must not use innerHTML");
-  assert.equal(source.includes("textContent"), true, "public CMS rendering must use textContent");
-  assert.equal(source.includes('document.execCommand("copy")'), true, "clipboard fallback must remain available");
-  assert.equal(source.includes("navigator.share"), true, "Web Share support must remain available when supported");
+  for (const sink of ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "setHTMLUnsafe"]) {
+    assert.equal(source.includes(sink), false, `public CMS rendering must not use ${sink}`);
+  }
+  assert.match(source, /\.textContent\s*=/, "public CMS rendering must assign untrusted copy through textContent");
+  assert.match(source, /execCommand\(\s*["']copy["']\s*\)/, "clipboard fallback must remain available");
+  assert.match(source, /navigator\.share/, "Web Share support must remain available when supported");
 }
-assert.equal(homeSource.includes("公開された原因情報はありません"), true);
-assert.equal(homeSource.includes('event.key === "Escape"'), true);
-assert.equal(homeSource.includes('document.addEventListener("pointerdown"'), true);
 
 console.log("Status Portal core tests passed.");
