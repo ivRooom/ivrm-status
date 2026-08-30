@@ -171,9 +171,11 @@ try {
   let interactionState = { skipped: true };
   if (isLocalFixture) {
     interactionState = await evaluate(`(async () => {
-      const buttons = [...document.querySelectorAll("button.uptime-bar[data-portal-ready='true']")];
-      const related = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開Incident"));
-      const noCause = buttons.find((button) => button.getAttribute("aria-label")?.includes("公開された原因情報はありません"));
+      const rows = [...document.querySelectorAll(".service-row")];
+      const rowByName = (name) => rows.find((row) => row.querySelector(".service-identity strong")?.textContent?.trim() === name);
+      const lastTimelineButton = (row) => [...(row?.querySelectorAll("button.uptime-bar[data-portal-ready='true']") || [])].at(-1);
+      const related = lastTimelineButton(rowByName("Minecraft Network"));
+      const noCause = lastTimelineButton(rowByName("Herta"));
       if (!related || !noCause) return { missingButtons: true };
 
       related.focus();
