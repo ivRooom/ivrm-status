@@ -12,6 +12,7 @@ import {
 } from "./status-portal-core.js";
 
 const $ = (id) => document.getElementById(id);
+const REQUEST_TIMEOUT_MS = 8_000;
 
 const IMPACT_COPY = {
   maintenance: {
@@ -77,6 +78,7 @@ const portalState = {
   closeTimer: null,
   deepLinkHandled: false,
   restoringPopoverFocus: false,
+  refreshing: false,
 };
 
 function ensurePortalStyles() {
@@ -144,7 +146,9 @@ function updateStatusPresentation() {
 }
 
 function formatDateTime(value) {
-  const date = new Date(value || 0);
+  const raw = safeText(value);
+  if (!raw) return "--";
+  const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return "--";
   return new Intl.DateTimeFormat("ja-JP", {
     month: "2-digit",
@@ -405,6 +409,19 @@ function ensureHomeInformationArchitecture() {
   if (headingTitle) headingTitle.textContent = "最近の障害・お知らせ";
   if (headingDescription) headingDescription.textContent = "復旧済みの障害と公開中のお知らせを新しいものから掲載します。";
 
+  const legacyRecentList = $("incidentList");
+  if (legacyRecentList) {
+    legacyRecentList.hidden = true;
+    let portalRecentList = $("portalRecentList");
+    if (!portalRecentList) {
+      portalRecentList = document.createElement("div");
+      portalRecentList.id = "portalRecentList";
+      portalRecentList.className = "incident-list";
+      portalRecentList.setAttribute("aria-live", "polite");
+      legacyRecentList.after(portalRecentList);
+    }
+  }
+
   const historyRoute = document.querySelector(".history-route");
   if (historyRoute && incidents.nextElementSibling !== historyRoute) incidents.after(historyRoute);
 
@@ -444,13 +461,19 @@ function renderHomeSections(snapshot) {
   for (const item of upcomingMaintenance.slice(0, 6)) upcomingList?.append(createMaintenanceCard(item, { compact: true }));
   if (upcomingSection) upcomingSection.hidden = upcomingMaintenance.length === 0;
 
-  const recentList = $("incidentList");
+  const recentList = $("portalRecentList");
   if (recentList) {
     recentList.replaceChildren();
     const recentRecords = [
       ...resolvedIncidents.map((record) => ({ record, at: new Date(record.updated_at || record.resolved_at || record.started_at || 0).getTime() })),
       ...activeAnnouncements.map((record) => ({ record, at: new Date(record.published_at || 0).getTime() })),
-    ].sort((a, b) => b.at - a.at).slice(0, 8);
+    ]
+      .filter(({ record }) => {
+        const publicId = safeText(record?.public_id);
+        return INCIDENT_ID_PATTERN.test(publicId) || ANNOUNCEMENT_ID_PATTERN.test(publicId);
+      })
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 8);
 
     if (!recentRecords.length) {
       const empty = document.createElement("div");
@@ -462,7 +485,7 @@ function renderHomeSections(snapshot) {
     } else {
       for (const { record } of recentRecords) {
         if (INCIDENT_ID_PATTERN.test(safeText(record.public_id))) recentList.append(createIncidentCard(record));
-        else if (ANNOUNCEMENT_ID_PATTERN.test(safeText(record.public_id))) recentList.append(createAnnouncementCard(record));
+        else recentList.append(createAnnouncementCard(record));
       }
     }
   }
@@ -690,28 +713,43 @@ function handleDeepLink(snapshot) {
 }
 
 async function loadPortalSnapshot() {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(`/api/status.json?portal=${Date.now()}`, {
       cache: "no-store",
       headers: { Accept: "application/json" },
+      signal: controller.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    if (!data || !Array.isArray(data.services)) return null;
+    if (!data || !Array.isArray(data.services)) throw new Error("invalid response");
     return data;
   } catch {
     return null;
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 
-async function refreshPortal() {
-  const snapshot = await loadPortalSnapshot();
-  if (!snapshot) return;
-  portalState.snapshot = snapshot;
-  ensureHomeInformationArchitecture();
-  renderHomeSections(snapshot);
-  enhanceTimelineBars(snapshot);
-  handleDeepLink(snapshot);
+async function refreshPortal({ announce = false } = {}) {
+  if (portalState.refreshing) return;
+  portalState.refreshing = true;
+  try {
+    const snapshot = await loadPortalSnapshot();
+    if (!snapshot) {
+      if (announce) showPortalToast("公開情報を取得できませんでした");
+      return;
+    }
+    portalState.snapshot = snapshot;
+    ensureHomeInformationArchitecture();
+    renderHomeSections(snapshot);
+    enhanceTimelineBars(snapshot);
+    handleDeepLink(snapshot);
+    if (announce) showPortalToast("公開情報を更新しました");
+  } finally {
+    portalState.refreshing = false;
+  }
 }
 
 function bindPortalGlobalInteractions() {
@@ -720,7 +758,7 @@ function bindPortalGlobalInteractions() {
   });
   document.addEventListener("focusin", (event) => {
     const popover = $("timelinePopover");
-    if (popover?.hidden) return;
+    if (!popover || popover.hidden) return;
     const target = event.target;
     if (popover.contains(target)) return;
     if (target === portalState.activePopoverAnchor) return;
@@ -729,15 +767,16 @@ function bindPortalGlobalInteractions() {
   });
   document.addEventListener("pointerdown", (event) => {
     const popover = $("timelinePopover");
-    if (popover?.hidden) return;
+    if (!popover || popover.hidden) return;
     if (popover.contains(event.target) || portalState.activePopoverAnchor?.contains(event.target)) return;
     closeTimelinePopover();
   });
   window.addEventListener("resize", () => {
     const popover = $("timelinePopover");
-    if (!popover?.hidden && portalState.activePopoverAnchor) positionPopover(portalState.activePopoverAnchor, popover);
+    if (popover && !popover.hidden && portalState.activePopoverAnchor) positionPopover(portalState.activePopoverAnchor, popover);
   });
-  $("refreshButton")?.addEventListener("click", () => window.setTimeout(refreshPortal, 250));
+  window.addEventListener("scroll", () => closeTimelinePopover(), { passive: true });
+  $("refreshButton")?.addEventListener("click", () => window.setTimeout(() => refreshPortal({ announce: true }), 250));
 }
 
 ensurePortalStyles();
