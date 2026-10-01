@@ -349,3 +349,16 @@
   .history-day-grid { gap: 2px; }
   .history-day { height: 28px; padding: 0; border-radius: 3px; font-size: 0; }
 }
+
+button.history-day {
+  appearance: none;
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+button.history-day:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+button.history-day[aria-expanded="true"] { border-color: rgba(255, 255, 255, .55); }
+#historyDayPopover[hidden] { display: none !important; }
+@media (max-width: 560px) {
+  button.history-day { font-size: 0; }
+}

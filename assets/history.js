@@ -1,4 +1,7 @@
+import { asArray, buildPublicRecordUrl, publicRecordServiceIds, safeText } from "./status-portal-core.js";
+
 const API_PATH = "/api/status-history.json";
+const DAY_MS = 24 * 60 * 60 * 1000;
 const ALLOWED_DAYS = new Set([7, 14, 30]);
 const STATUS_COPY = {
   operational: "稼働中",
@@ -25,6 +28,8 @@ const params = new URLSearchParams(window.location.search);
 const initialDays = Number(params.get("days"));
 let selectedDays = ALLOWED_DAYS.has(initialDays) ? initialDays : 30;
 let toastTimer = null;
+let latestHistory = null;
+let activeDayButton = null;
 
 function formatDate(value, options = {}) {
   const date = new Date(`${value}T00:00:00Z`);
@@ -72,16 +77,150 @@ function updateRangeButtons() {
   }
 }
 
-function createHistoryDay(day) {
-  const cell = document.createElement("span");
+function createHistoryDay(day, service) {
+  const cell = document.createElement("button");
   const status = STATUS_COPY[day.status] ? day.status : "unknown";
   const availability = formatAvailability(day.availability_percent);
+  cell.type = "button";
   cell.className = "history-day";
   cell.dataset.status = status;
   cell.textContent = new Date(`${day.date}T00:00:00Z`).getUTCDate();
-  cell.title = `${formatDate(day.date, { year: "numeric" })}：${STATUS_COPY[status]} / 観測 ${day.samples}件 / 稼働率 ${availability}`;
-  cell.setAttribute("aria-label", cell.title);
+  cell.setAttribute("aria-label", `${service.name} ${formatDate(day.date, { year: "numeric" })}：${STATUS_COPY[status]} / 稼働率 ${availability}`);
+  cell.setAttribute("aria-haspopup", "dialog");
+  cell.setAttribute("aria-expanded", "false");
+  cell.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openDayPopover(cell, day, service);
+  });
+  cell.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "mouse") openDayPopover(cell, day, service);
+  });
   return cell;
+}
+
+function textElement(tag, className, text) {
+  const element = document.createElement(tag);
+  if (className) element.className = className;
+  element.textContent = text;
+  return element;
+}
+
+function metaRow(label, value) {
+  const row = document.createElement("div");
+  row.className = "portal-meta-row";
+  row.append(textElement("span", "", label), textElement("strong", "", value));
+  return row;
+}
+
+function recordRange(record) {
+  const start = new Date(record.started_at || record.starts_at || record.published_at || 0).getTime();
+  const endValue = record.resolved_at || record.ends_at;
+  const end = endValue ? new Date(endValue).getTime() : Date.now();
+  return [start, end];
+}
+
+// Public incidents / maintenance that affected this service on this day (days are aggregated in UTC).
+function relatedRecords(day, service) {
+  const dayStart = new Date(`${day.date}T00:00:00Z`).getTime();
+  const dayEnd = dayStart + DAY_MS;
+  return [...asArray(latestHistory?.incidents), ...asArray(latestHistory?.maintenance)].filter((record) => {
+    if (!publicRecordServiceIds(record).includes(service.id)) return false;
+    const [start, end] = recordRange(record);
+    return start > 0 && start < dayEnd && end >= dayStart;
+  });
+}
+
+function ensureDayPopover() {
+  let popover = document.querySelector("#historyDayPopover");
+  if (popover) return popover;
+  popover = document.createElement("div");
+  popover.id = "historyDayPopover";
+  popover.className = "timeline-popover";
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-label", "日別の稼働詳細");
+  popover.hidden = true;
+  popover.tabIndex = -1;
+  document.body.append(popover);
+  return popover;
+}
+
+function positionDayPopover() {
+  const popover = document.querySelector("#historyDayPopover");
+  if (!popover || popover.hidden || !activeDayButton) return;
+  const rect = activeDayButton.getBoundingClientRect();
+  const margin = 12;
+  const width = Math.min(320, window.innerWidth - margin * 2);
+  popover.style.width = `${width}px`;
+  popover.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2))}px`;
+  const below = rect.bottom + 8;
+  const fitsBelow = below + popover.offsetHeight + margin <= window.innerHeight;
+  popover.style.top = `${fitsBelow ? below : Math.max(margin, rect.top - popover.offsetHeight - 8)}px`;
+}
+
+function emptyDayNote(status) {
+  if (status === "unknown") return "この日の監視データはありません";
+  if (status === "operational") return "この日に問題は観測されていません";
+  return "この日に関連する公開障害情報はありません";
+}
+
+function openDayPopover(button, day, service) {
+  const popover = ensureDayPopover();
+  if (activeDayButton && activeDayButton !== button) activeDayButton.setAttribute("aria-expanded", "false");
+  activeDayButton = button;
+  button.setAttribute("aria-expanded", "true");
+  const status = STATUS_COPY[day.status] ? day.status : "unknown";
+
+  const head = document.createElement("div");
+  head.className = "timeline-popover-head";
+  const copy = document.createElement("div");
+  copy.append(
+    textElement("span", "portal-record-type", service.name),
+    textElement("strong", "", `${formatDate(day.date, { year: "numeric" })}・${STATUS_COPY[status]}`),
+  );
+  const close = textElement("button", "timeline-popover-close", "閉じる");
+  close.type = "button";
+  close.addEventListener("click", () => closeDayPopover({ restoreFocus: true }));
+  head.append(copy, close);
+
+  const meta = document.createElement("div");
+  meta.className = "portal-record-meta";
+  meta.append(
+    metaRow("稼働率", formatAvailability(day.availability_percent)),
+    metaRow("観測", `${Number(day.samples || 0).toLocaleString("ja-JP")}件`),
+  );
+  popover.replaceChildren(head, meta);
+
+  const records = relatedRecords(day, service);
+  if (!records.length) popover.append(textElement("p", "timeline-popover-empty", emptyDayNote(status)));
+  for (const record of records) {
+    const detail = document.createElement("div");
+    detail.className = "timeline-popover-incident";
+    detail.append(
+      textElement("strong", "", safeText(record.title, "公開情報")),
+      textElement("p", "", safeText(record.summary, "公開された詳細情報はありません。")),
+    );
+    const url = buildPublicRecordUrl(record, { origin: window.location.origin, history: true });
+    if (url) {
+      const link = textElement("a", "portal-detail-link", "詳細を見る");
+      link.href = url;
+      detail.append(link);
+    }
+    popover.append(detail);
+  }
+  popover.append(textElement("p", "timeline-popover-time", "日付はUTC基準で集計しています"));
+  popover.hidden = false;
+  positionDayPopover();
+}
+
+function closeDayPopover({ restoreFocus = false } = {}) {
+  const popover = document.querySelector("#historyDayPopover");
+  if (!popover || popover.hidden) return;
+  popover.hidden = true;
+  popover.replaceChildren();
+  const button = activeDayButton;
+  activeDayButton = null;
+  button?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && button?.isConnected) button.focus({ preventScroll: true });
 }
 
 function createServiceCard(service, range) {
@@ -130,7 +269,7 @@ function createServiceCard(service, range) {
   const grid = document.createElement("div");
   grid.className = "history-day-grid";
   grid.style.setProperty("--history-days", String(range.days));
-  for (const day of service.days) grid.append(createHistoryDay(day));
+  for (const day of service.days) grid.append(createHistoryDay(day, service));
 
   const axis = document.createElement("div");
   axis.className = "history-axis";
@@ -178,6 +317,8 @@ function renderIncidents(incidents) {
 }
 
 function renderHistory(data) {
+  closeDayPopover();
+  latestHistory = data;
   const range = data.range;
   const services = Array.isArray(data.services) ? data.services : [];
   elements.rangeText.textContent = `${formatDate(range.from_date)} – ${formatDate(range.to_date)}`;
@@ -240,6 +381,29 @@ async function loadHistory({ announce = false } = {}) {
 }
 
 elements.refreshButton.addEventListener("click", () => loadHistory({ announce: true }));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeDayPopover({ restoreFocus: true });
+});
+document.addEventListener("pointerdown", (event) => {
+  const popover = document.querySelector("#historyDayPopover");
+  if (!popover || popover.hidden || popover.contains(event.target) || activeDayButton?.contains(event.target)) return;
+  closeDayPopover();
+});
+// Mouse users get hover previews; close once the pointer leaves both the grid and the popover.
+let hoverCloseTimer = null;
+function scheduleHoverClose(event) {
+  if (event.pointerType !== "mouse") return;
+  window.clearTimeout(hoverCloseTimer);
+  hoverCloseTimer = window.setTimeout(() => {
+    const popover = document.querySelector("#historyDayPopover");
+    if (popover?.matches(":hover") || activeDayButton?.matches(":hover") || popover?.contains(document.activeElement)) return;
+    closeDayPopover();
+  }, 160);
+}
+elements.historyServiceList.addEventListener("pointerout", scheduleHoverClose);
+ensureDayPopover().addEventListener("pointerleave", scheduleHoverClose);
+window.addEventListener("resize", positionDayPopover);
+window.addEventListener("scroll", positionDayPopover, { passive: true });
 for (const button of elements.rangeButtons) {
   button.addEventListener("click", () => {
     const days = Number(button.dataset.days);
