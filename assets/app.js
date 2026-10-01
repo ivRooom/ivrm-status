@@ -286,7 +286,22 @@ function renderServiceGroups(services) {
 
   container.innerHTML = Object.entries(grouped)
     .map(([groupName, groupServices]) => `<article class="service-group"><header class="service-group-header"><h3>${escapeHtml(groupName)}</h3><span>${groupServices.length} service${groupServices.length === 1 ? "" : "s"}</span></header>${groupServices.map(renderServiceRow).join("")}</article>`)
-    .join("");
+    .join("") + UPTIME_LEGEND;
+}
+
+const UPTIME_LEGEND = `<ul class="uptime-legend" aria-label="タイムラインの凡例">${[
+  ["operational", "正常"],
+  ["degraded", "一部影響・メンテナンス"],
+  ["outage", "障害"],
+  ["unknown", "データなし"],
+].map(([status, label]) => `<li><i class="${status}" aria-hidden="true"></i>${label}</li>`).join("")}</ul>`;
+
+// Hourly buckets: one affected minute marks the whole hour, so report hours rather than a percentage.
+function healthyHoursLabel(timeline) {
+  const known = timeline.map(normalizeStatus).filter((status) => status !== "unknown");
+  if (!known.length) return "データなし";
+  const up = known.filter((status) => status === "operational").length;
+  return `正常 ${up} / ${known.length}時間`;
 }
 
 function renderServiceRow(service) {
@@ -295,7 +310,8 @@ function renderServiceRow(service) {
     .map((status, index) => `<span class="uptime-bar ${normalizeStatus(status)}" title="${index + 1}時間帯: ${STATUS_COPY[normalizeStatus(status)]}"></span>`)
     .join("");
 
-  return `<div class="service-row"><div class="service-identity"><span class="service-icon">${statusIcon(service.id)}</span><div><strong>${escapeHtml(service.name)}</strong><p>${escapeHtml(service.description)}</p></div></div><div class="uptime-block" aria-label="${escapeHtml(service.name)}の直近24時間"><div class="uptime-bars">${bars}</div><div class="uptime-caption"><span>24時間前</span><span>現在</span></div></div><span class="service-state ${service.status}">${STATUS_COPY[service.status]}</span></div>`;
+
+  return `<div class="service-row"><div class="service-identity"><span class="service-icon">${statusIcon(service.id)}</span><div><strong>${escapeHtml(service.name)}</strong><p>${escapeHtml(service.description)}</p></div></div><div class="uptime-block" aria-label="${escapeHtml(service.name)}の直近24時間"><div class="uptime-bars">${bars}</div><div class="uptime-caption"><span>24時間前</span><span class="uptime-percent">${healthyHoursLabel(service.timeline)}</span><span>現在</span></div></div><span class="service-state ${service.status}">${STATUS_COPY[service.status]}</span></div>`;
 }
 
 function renderMinecraftFeature(services) {
