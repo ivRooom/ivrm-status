@@ -85,7 +85,7 @@ function ensurePortalStyles() {
   if (document.querySelector('link[data-status-portal-styles]')) return;
   const link = document.createElement("link");
   link.rel = "stylesheet";
-  link.href = "/assets/status-portal.css?v=20260830-1";
+  link.href = "/assets/status-portal.css?v=20261002-1";
   link.dataset.statusPortalStyles = "true";
   document.head.append(link);
 }
@@ -478,9 +478,18 @@ function renderHomeSections(snapshot) {
     if (!recentRecords.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
+      const icon = document.createElement("span");
+      icon.className = "empty-state-icon";
+      icon.setAttribute("aria-hidden", "true");
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", "m5 12 4 4L19 6");
+      svg.append(path);
+      icon.append(svg);
       const copy = document.createElement("div");
-      copy.append(createTextElement("strong", "", "最近の公開情報はありません"), createTextElement("p", "", "復旧済みの障害やお知らせが公開された場合、ここに表示します。"));
-      empty.append(copy);
+      copy.append(createTextElement("strong", "", "最近の障害・お知らせはありません"), createTextElement("p", "", "障害やメンテナンスが発生した場合、このページでお知らせします。"));
+      empty.append(icon, copy);
       recentList.append(empty);
     } else {
       for (const { record } of recentRecords) {

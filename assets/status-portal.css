@@ -503,3 +503,170 @@ button.uptime-bar:focus-visible { outline: 2px solid var(--cyan); outline-offset
   button.uptime-bar:hover,
   button.uptime-bar:focus-visible { transform: none; }
 }
+
+/* Compact status layout — calm, scannable when everything is fine */
+.incident-list[hidden] { display: none !important; }
+
+.status-hero {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 20px;
+  margin-top: 24px;
+  padding: 22px 26px;
+  border-radius: 20px;
+  background: linear-gradient(100deg, var(--hero-tint, rgba(140, 151, 169, .08)), rgba(255, 255, 255, .012) 55%), rgba(11, 15, 22, .86);
+  border-color: var(--hero-border, var(--border));
+}
+body[data-overall-status="operational"] { --hero-tint: rgba(82, 215, 165, .10); --hero-border: rgba(82, 215, 165, .22); --hero-accent: var(--success); }
+body[data-overall-status="maintenance"],
+body[data-overall-status="degraded"] { --hero-tint: rgba(244, 191, 95, .11); --hero-border: rgba(244, 191, 95, .26); --hero-accent: var(--warning); }
+body[data-overall-status="outage"] { --hero-tint: rgba(242, 121, 135, .12); --hero-border: rgba(242, 121, 135, .30); --hero-accent: var(--danger); }
+.status-hero::before {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--hero-accent, var(--unknown)) 16%, transparent);
+  color: var(--hero-accent, var(--unknown));
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1;
+  content: "…";
+}
+body[data-overall-status="operational"] .status-hero::before { content: "✓"; }
+body[data-overall-status="maintenance"] .status-hero::before { content: "⚙"; }
+body[data-overall-status="degraded"] .status-hero::before,
+body[data-overall-status="outage"] .status-hero::before { content: "!"; }
+.hero-orbit { display: none; }
+.status-kicker {
+  margin-bottom: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hero-accent, var(--muted));
+  font-size: 10px;
+}
+.status-hero h1 {
+  font-size: clamp(22px, 2.6vw, 28px);
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.3;
+}
+.status-hero-copy > p {
+  margin-top: 4px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.status-hero-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: right;
+}
+.status-hero-meta > div,
+.status-hero-meta > div:last-child {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.status-hero-meta span { margin: 0; font-size: 11px; letter-spacing: 0; text-transform: none; }
+.status-hero-meta strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+.status-hero-meta > div:last-child strong { color: var(--muted); font-weight: 500; }
+
+.summary-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(13, 17, 24, .68);
+}
+.summary-item,
+.summary-item:first-child,
+.summary-item:nth-child(3),
+.summary-item:last-child {
+  padding: 14px 18px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+}
+.summary-item:first-child { border-left: 0; }
+.summary-item span { margin-bottom: 4px; font-size: 10px; }
+.summary-item strong,
+.summary-item-wide strong { font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.section-block { padding: 52px 0; }
+.section-heading { margin-bottom: 20px; }
+.section-heading h2 { font-size: clamp(22px, 2.6vw, 28px); }
+
+.uptime-caption { align-items: center; }
+.uptime-percent { color: var(--text-soft); font-weight: 700; font-variant-numeric: tabular-nums; }
+.uptime-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 4px 2px 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+  list-style: none;
+}
+.uptime-legend li { display: inline-flex; gap: 6px; align-items: center; }
+.uptime-legend i { width: 8px; height: 12px; border-radius: 3px; background: var(--unknown); }
+.uptime-legend .operational { background: var(--success); }
+.uptime-legend .degraded { background: var(--warning); }
+.uptime-legend .outage { background: var(--danger); }
+.uptime-legend .unknown { background: rgba(140, 151, 169, .35); }
+
+.minecraft-feature { gap: 20px; padding: 24px 26px; }
+.minecraft-feature h2 { font-size: clamp(20px, 2.2vw, 24px); }
+.feature-icon { width: 46px; height: 46px; border-radius: 14px; }
+.feature-icon svg { width: 24px; }
+.feature-stat strong { display: flex; gap: 2px; align-items: baseline; white-space: nowrap; }
+.feature-stat strong small,
+.feature-stat strong small span { display: inline; margin: 0; color: var(--muted); font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+.empty-state { align-items: center; padding: 18px 20px; }
+.empty-state-icon { width: 36px; height: 36px; border-radius: 11px; }
+.empty-state strong { margin-bottom: 2px; font-size: 14px; }
+.empty-state p { font-size: 12px; }
+
+@media (max-width: 900px) {
+  .status-hero { grid-template-columns: auto minmax(0, 1fr); padding: 20px; }
+  .status-hero-meta { grid-column: 1 / -1; flex-direction: row; gap: 16px; justify-content: flex-start; padding-top: 12px; border-top: 1px solid var(--border); }
+  .status-hero-meta > div,
+  .status-hero-meta > div:last-child { border: 0; }
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-item:nth-child(3) { border-left: 0; }
+  .summary-item:nth-child(n + 3) { border-top: 1px solid var(--border); }
+}
+
+@media (max-width: 620px) {
+  .status-hero { gap: 14px; margin-top: 14px; padding: 18px 16px; border-radius: 16px; }
+  .status-hero::before { width: 40px; height: 40px; font-size: 18px; }
+  .status-hero h1 { font-size: 20px; }
+  .status-hero-copy > p { font-size: 12px; }
+  .summary-item,
+  .summary-item:first-child,
+  .summary-item:nth-child(3),
+  .summary-item:last-child { padding: 12px 14px; }
+  .summary-item strong,
+  .summary-item-wide strong { font-size: 16px; }
+  .section-block { padding: 40px 0; }
+  .minecraft-feature { padding: 20px 16px; }
+  .minecraft-feature-data { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); }
+}
+
+@media (max-width: 390px) {
+  .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
