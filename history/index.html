@@ -7,9 +7,9 @@
     <meta name="description" content="ivRooomが提供するサービスの稼働履歴と公開Incident・Maintenance・Announcementを確認できます。" />
     <title>稼働履歴 | ivRooom Status</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260830-1" />
-    <link rel="stylesheet" href="/assets/history.css?v=20260830-1" />
-    <link rel="stylesheet" href="/assets/navigation.css?v=20260830-1" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261002-1" />
+    <link rel="stylesheet" href="/assets/history.css?v=20261002-2" />
+    <link rel="stylesheet" href="/assets/navigation.css?v=20261002-1" />
     <link rel="stylesheet" href="/assets/status-portal.css?v=20261002-1" />
   </head>
   <body>
@@ -41,7 +41,7 @@
           <div>
             <p class="section-label">SERVICE HISTORY</p>
             <h1 id="historyTitle">サービスの稼働履歴</h1>
-            <p>各サービスの状態を日単位で集約し、正常稼働率と影響のあった日を確認できます。</p>
+            <p>サービスごとの日別状態と期間内の稼働率を確認できます。</p>
           </div>
           <div class="history-range-control" aria-label="表示期間">
             <span>表示期間</span>
@@ -52,10 +52,6 @@
             </div>
           </div>
         </section>
-
-        <nav class="history-back-route" aria-label="現在の稼働状況へ戻る">
-          <a href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/><path d="M9 12h10"/></svg><span>現在の稼働状況へ戻る</span></a>
-        </nav>
 
         <section class="history-summary" aria-label="履歴概要">
           <div><span>表示期間</span><strong id="rangeText">--</strong></div>
@@ -124,8 +120,8 @@
       <footer class="site-footer"><div><strong>ivRooom Status</strong><span>公式サービスステータス</span></div><p id="footerTimestamp">Updated --</p></footer>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="/assets/api-fetch-guard.js?v=20260830-1"></script>
-    <script type="module" src="/assets/history.js?v=20260830-1"></script>
-    <script type="module" src="/assets/history-portal.js?v=20260830-1"></script>
+    <script src="/assets/api-fetch-guard.js?v=20261002-1"></script>
+    <script type="module" src="/assets/history.js?v=20261002-2"></script>
+    <script type="module" src="/assets/history-portal.js?v=20261002-1"></script>
   </body>
 </html>
