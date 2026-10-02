@@ -670,3 +670,11 @@ body[data-overall-status="outage"] .status-hero::before { content: "!"; }
 @media (max-width: 390px) {
   .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Freshness lives next to the last-updated time; the summary row shows 24h impact instead */
+.freshness-text { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.freshness-text::before { margin-right: 6px; content: "·"; }
+.freshness-text.stale { color: var(--warning); font-weight: 700; }
+
+.minecraft-feature-lead { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+#minecraftMode[hidden] { display: none; }
