@@ -26,6 +26,9 @@ from .public_content import PublicContentSource
 # offset avoids depending on tzdata being present in the container image.
 HISTORY_TIMEZONE_NAME = "Asia/Tokyo"
 HISTORY_TIMEZONE = timezone(timedelta(hours=9), "JST")
+# A gap between samples longer than this is not counted as impact time, so a
+# collector outage cannot inflate the duration of an incident.
+HISTORY_MAX_SAMPLE_GAP = timedelta(minutes=10)
 
 
 class StatusService:
@@ -109,6 +112,8 @@ class StatusService:
             self.minecraft.history_samples(start, generated_at),
             start_date,
             days,
+            self.settings.history_min_impact_seconds,
+            generated_at,
         )
         herta_days, herta_availability = self._daily_history(
             [
@@ -118,6 +123,8 @@ class StatusService:
             ],
             start_date,
             days,
+            self.settings.history_min_impact_seconds,
+            generated_at,
         )
 
         return PublicHistoryResponse(
@@ -127,6 +134,7 @@ class StatusService:
                 from_date=start_date,
                 to_date=today,
                 timezone=HISTORY_TIMEZONE_NAME,
+                min_impact_seconds=self.settings.history_min_impact_seconds,
             ),
             services=[
                 PublicHistoryService(
@@ -296,11 +304,49 @@ class StatusService:
         ]
 
     @staticmethod
+    def _significant_impacts(
+        samples: list[tuple[datetime, PublicStatus]],
+        min_impact_seconds: int,
+        end: datetime,
+    ) -> list[tuple[datetime, datetime, PublicStatus]]:
+        """Runs of non-operational samples that lasted at least min_impact_seconds."""
+        known = sorted(
+            ((at, status) for at, status in samples if status != PublicStatus.UNKNOWN),
+            key=lambda item: item[0],
+        )
+        impacts: list[tuple[datetime, datetime, PublicStatus]] = []
+        index = 0
+        while index < len(known):
+            if known[index][1] == PublicStatus.OPERATIONAL:
+                index += 1
+                continue
+            run_start = known[index][0]
+            run_statuses: list[PublicStatus] = []
+            duration = timedelta()
+            while index < len(known) and known[index][1] != PublicStatus.OPERATIONAL:
+                at, status = known[index]
+                next_at = known[index + 1][0] if index + 1 < len(known) else end
+                duration += min(max(next_at - at, timedelta()), HISTORY_MAX_SAMPLE_GAP)
+                run_statuses.append(status)
+                index += 1
+            if duration.total_seconds() >= min_impact_seconds:
+                impacts.append((run_start, run_start + duration, worst_status(run_statuses)))
+        return impacts
+
+    @staticmethod
     def _daily_history(
         samples: list[tuple[datetime, PublicStatus]],
         start_date: date,
         days: int,
+        min_impact_seconds: int = 0,
+        end: datetime | None = None,
     ) -> tuple[list[PublicHistoryDay], float | None]:
+        """Daily status on Japan calendar days.
+
+        A day is marked impacted only by an outage/degradation/maintenance run that
+        lasted at least min_impact_seconds, so brief restarts do not turn a whole day
+        red. availability_percent is still the plain share of operational samples.
+        """
         buckets: dict[date, list[PublicStatus]] = {
             start_date + timedelta(days=index): [] for index in range(days)
         }
@@ -308,6 +354,20 @@ class StatusService:
             sample_date = recorded_at.astimezone(HISTORY_TIMEZONE).date()
             if sample_date in buckets:
                 buckets[sample_date].append(status)
+
+        impacted: dict[date, list[PublicStatus]] = {day: [] for day in buckets}
+        for run_start, run_end, status in StatusService._significant_impacts(
+            samples,
+            min_impact_seconds,
+            end or max((at for at, _ in samples), default=datetime.now(UTC)),
+        ):
+            first = run_start.astimezone(HISTORY_TIMEZONE).date()
+            last = run_end.astimezone(HISTORY_TIMEZONE).date()
+            day = first
+            while day <= last:
+                if day in impacted:
+                    impacted[day].append(status)
+                day += timedelta(days=1)
 
         result: list[PublicHistoryDay] = []
         operational_total = 0
@@ -319,7 +379,13 @@ class StatusService:
             result.append(
                 PublicHistoryDay(
                     date=day,
-                    status=worst_status(known) if known else PublicStatus.UNKNOWN,
+                    status=(
+                        worst_status(impacted[day])
+                        if impacted[day]
+                        else PublicStatus.OPERATIONAL
+                        if known
+                        else PublicStatus.UNKNOWN
+                    ),
                     samples=len(values),
                     availability_percent=day_availability,
                 )

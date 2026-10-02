@@ -321,9 +321,19 @@ function renderIncidents(incidents) {
   }
 }
 
+function updateLegendNote(range) {
+  const note = document.querySelector("#historyLegendNote");
+  if (!note) return;
+  const minutes = Math.round(Number(range?.min_impact_seconds || 0) / 60);
+  note.textContent = minutes > 0
+    ? `色付きのセルは、その日に${minutes}分以上続いた最も影響の大きい状態を示します。短時間の再起動などは反映されません。データがない日は「確認中」として表示します。`
+    : "色付きのセルは、その日に観測された最も影響の大きい状態を示します。データがない日は「確認中」として表示します。";
+}
+
 function renderHistory(data) {
   closeDayPopover();
   latestHistory = data;
+  updateLegendNote(data.range);
   const range = data.range;
   const services = Array.isArray(data.services) ? data.services : [];
   elements.rangeText.textContent = `${formatDate(range.from_date)} – ${formatDate(range.to_date)}`;
