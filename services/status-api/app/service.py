@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, time, timedelta, timezone
 
 from .config import Settings
 from .db import Snapshot, StatusRepository
+from .impact import bucket_statuses, significant_impacts
 from .minecraft import MinecraftSource
 from .minecraft_probe import MinecraftStatusProbe
 from .models import (
@@ -26,9 +27,6 @@ from .public_content import PublicContentSource
 # offset avoids depending on tzdata being present in the container image.
 HISTORY_TIMEZONE_NAME = "Asia/Tokyo"
 HISTORY_TIMEZONE = timezone(timedelta(hours=9), "JST")
-# A gap between samples longer than this is not counted as impact time, so a
-# collector outage cannot inflate the duration of an incident.
-HISTORY_MAX_SAMPLE_GAP = timedelta(minutes=10)
 
 
 class StatusService:
@@ -51,6 +49,7 @@ class StatusService:
             history_path=settings.minecraft_history_path,
             stale_after_seconds=settings.minecraft_stale_after_seconds,
             probe=minecraft_probe,
+            min_impact_seconds=settings.history_min_impact_seconds,
         )
         self.public_content = PublicContentSource(
             feed_url=settings.public_content_feed_url,
@@ -173,6 +172,7 @@ class StatusService:
             self.repository.snapshots_since("herta-discord-bot", since),
             since,
             now,
+            self.settings.history_min_impact_seconds,
         )
 
         if latest is None:
@@ -213,15 +213,15 @@ class StatusService:
         snapshots: list[Snapshot],
         start: datetime,
         end: datetime,
+        min_impact_seconds: int = 0,
     ) -> list[PublicStatus]:
-        buckets: list[list[PublicStatus]] = [[] for _ in range(24)]
-        for snapshot in snapshots:
-            received = snapshot.received_at.astimezone(UTC)
-            if received < start or received > end:
-                continue
-            index = min(23, int((received - start).total_seconds() // 3600))
-            buckets[index].append(snapshot.status)
-        return [worst_status(bucket) if bucket else PublicStatus.UNKNOWN for bucket in buckets]
+        samples = [
+            (snapshot.received_at.astimezone(UTC), snapshot.status)
+            for snapshot in snapshots
+            if start <= snapshot.received_at.astimezone(UTC) <= end
+        ]
+        starts = [start + timedelta(hours=index) for index in range(24)]
+        return bucket_statuses(samples, starts, timedelta(hours=1), min_impact_seconds, end)
 
     @staticmethod
     def _timeline_details(
@@ -304,36 +304,6 @@ class StatusService:
         ]
 
     @staticmethod
-    def _significant_impacts(
-        samples: list[tuple[datetime, PublicStatus]],
-        min_impact_seconds: int,
-        end: datetime,
-    ) -> list[tuple[datetime, datetime, PublicStatus]]:
-        """Runs of non-operational samples that lasted at least min_impact_seconds."""
-        known = sorted(
-            ((at, status) for at, status in samples if status != PublicStatus.UNKNOWN),
-            key=lambda item: item[0],
-        )
-        impacts: list[tuple[datetime, datetime, PublicStatus]] = []
-        index = 0
-        while index < len(known):
-            if known[index][1] == PublicStatus.OPERATIONAL:
-                index += 1
-                continue
-            run_start = known[index][0]
-            run_statuses: list[PublicStatus] = []
-            duration = timedelta()
-            while index < len(known) and known[index][1] != PublicStatus.OPERATIONAL:
-                at, status = known[index]
-                next_at = known[index + 1][0] if index + 1 < len(known) else end
-                duration += min(max(next_at - at, timedelta()), HISTORY_MAX_SAMPLE_GAP)
-                run_statuses.append(status)
-                index += 1
-            if duration.total_seconds() >= min_impact_seconds:
-                impacts.append((run_start, run_start + duration, worst_status(run_statuses)))
-        return impacts
-
-    @staticmethod
     def _daily_history(
         samples: list[tuple[datetime, PublicStatus]],
         start_date: date,
@@ -356,7 +326,7 @@ class StatusService:
                 buckets[sample_date].append(status)
 
         impacted: dict[date, list[PublicStatus]] = {day: [] for day in buckets}
-        for run_start, run_end, status in StatusService._significant_impacts(
+        for run_start, run_end, status in significant_impacts(
             samples,
             min_impact_seconds,
             end or max((at for at, _ in samples), default=datetime.now(UTC)),

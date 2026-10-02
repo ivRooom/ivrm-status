@@ -188,19 +188,67 @@ def test_outage_crossing_japan_midnight_marks_both_days() -> None:
     assert days["2026-10-02"].status.value == "outage"
 
 
-def test_collector_gap_does_not_inflate_a_brief_blip() -> None:
+def test_collector_gap_is_capped_when_measuring_impact() -> None:
     base = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
     samples = [
         (base, "operational"),
         (base + timedelta(minutes=1), "outage"),
+        (base + timedelta(minutes=2), "outage"),
         (base + timedelta(hours=5), "operational"),  # collector was down for hours
     ]
-    days, _ = _run(samples)
-    # Counted as at most the 10 minute gap cap, so a 1 sample blip with a long gap
-    # is still capped; with a 15 minute threshold it must not mark the day.
+    # 1 minute + the 10 minute cap = 11 minutes, not ~5 hours.
+    days, _ = _run(samples, min_seconds=300)
+    assert days["2026-10-01"].status.value == "outage"
     days_strict, _ = _run(samples, min_seconds=900)
     assert days_strict["2026-10-01"].status.value == "operational"
+
+
+def test_single_sample_blip_is_ignored_with_sparse_sampling() -> None:
+    base = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+    # Five minute sampling: one bad sample cannot prove the impact lasted.
+    samples = [
+        (base + timedelta(minutes=5 * index), "outage" if index == 3 else "operational")
+        for index in range(10)
+    ]
+    days, _ = _run(samples)
+    assert days["2026-10-01"].status.value == "operational"
+
+
+def test_ongoing_single_sample_outage_is_still_reported() -> None:
+    base = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+    samples = _every_minute(base, 10, "operational") + [(base + timedelta(minutes=10), "outage")]
+    days, _ = _run(samples, end=base + timedelta(minutes=16))
     assert days["2026-10-01"].status.value == "outage"
+
+
+def test_hourly_timeline_ignores_brief_restart() -> None:
+    from app.impact import bucket_statuses
+    from app.models import PublicStatus
+
+    start = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+    samples = [
+        (start + timedelta(minutes=offset), PublicStatus.OUTAGE if offset in (61, 62) else PublicStatus.OPERATIONAL)
+        for offset in range(0, 180)
+    ]
+    starts = [start + timedelta(hours=index) for index in range(3)]
+    end = start + timedelta(hours=3)
+    brief = bucket_statuses(samples, starts, timedelta(hours=1), 300, end)
+    assert [status.value for status in brief] == ["operational"] * 3
+    strict = bucket_statuses(samples, starts, timedelta(hours=1), 0, end)
+    assert strict[1].value == "outage"
+
+
+def test_hourly_timeline_marks_sustained_outage_and_missing_data() -> None:
+    from app.impact import bucket_statuses
+    from app.models import PublicStatus
+
+    start = datetime(2026, 10, 1, 0, 0, tzinfo=UTC)
+    samples = [
+        (start + timedelta(hours=1, minutes=offset), PublicStatus.OUTAGE) for offset in range(0, 12)
+    ] + [(start + timedelta(hours=1, minutes=12), PublicStatus.OPERATIONAL)]
+    starts = [start + timedelta(hours=index) for index in range(3)]
+    result = bucket_statuses(samples, starts, timedelta(hours=1), 300, start + timedelta(hours=3))
+    assert [status.value for status in result] == ["unknown", "outage", "unknown"]
 
 
 def test_zero_threshold_keeps_previous_behavior() -> None:
