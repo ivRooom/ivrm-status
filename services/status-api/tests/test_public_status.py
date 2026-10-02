@@ -256,3 +256,72 @@ def test_zero_threshold_keeps_previous_behavior() -> None:
     samples = _every_minute(base, 5, "operational") + _every_minute(base + timedelta(minutes=5), 1, "degraded")
     days, _ = _run(samples, min_seconds=0)
     assert days["2026-10-01"].status.value == "degraded"
+
+
+def _write_history(path, start, statuses):
+    path.write_text(
+        json.dumps(
+            [
+                {"collected_at": (start + timedelta(minutes=5 * index)).isoformat(), "status": status}
+                for index, status in enumerate(statuses)
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_minecraft_history_survives_collector_rotation(settings: Settings) -> None:
+    repository = StatusRepository(settings.db_path)
+    repository.initialize(settings.herta_stale_after_seconds)
+    service = StatusService(settings, repository)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    # 2026-07-24 12:00 JST: a 15 minute outage seen by the collector.
+    start = datetime(2026, 7, 24, 3, 0, tzinfo=UTC)
+    _write_history(settings.minecraft_history_path, start, ["online"] * 4 + ["offline"] * 4 + ["online"] * 4)
+
+    first = service.public_history(days=3, now=now)
+    minecraft = next(item for item in first.services if item.id == "minecraft-network")
+    day = next(item for item in minecraft.days if str(item.date) == "2026-07-24")
+    assert day.status.value == "outage"
+    assert day.samples == 12
+
+    # The collector rotates its file and forgets the previous day.
+    settings.minecraft_history_path.write_text("[]", encoding="utf-8")
+    second = StatusService(settings, repository).public_history(days=3, now=now)
+    minecraft = next(item for item in second.services if item.id == "minecraft-network")
+    day = next(item for item in minecraft.days if str(item.date) == "2026-07-24")
+    assert day.status.value == "outage"
+    assert day.samples == 12
+
+
+def test_minecraft_sample_persistence_failure_does_not_break_status(
+    settings: Settings, monkeypatch
+) -> None:
+    repository = StatusRepository(settings.db_path)
+    repository.initialize(settings.herta_stale_after_seconds)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(repository, "save_minecraft_samples", boom)
+    service = StatusService(settings, repository)
+    result = service.public_status(datetime(2026, 7, 25, 4, 0, tzinfo=UTC))
+    assert {item.id for item in result.services} == {"minecraft-network", "herta-discord-bot"}
+
+
+def test_minecraft_samples_are_deduplicated_and_pruned(settings: Settings) -> None:
+    from app.models import PublicStatus
+
+    repository = StatusRepository(settings.db_path)
+    repository.initialize(settings.herta_stale_after_seconds)
+    now = datetime(2026, 7, 25, 4, 0, tzinfo=UTC)
+    old = now - timedelta(days=40)
+    recent = now - timedelta(hours=1)
+    cutoff = now - timedelta(days=30)
+    repository.save_minecraft_samples(
+        [(old, PublicStatus.OPERATIONAL), (recent, PublicStatus.OUTAGE)], cutoff
+    )
+    repository.save_minecraft_samples([(recent, PublicStatus.OUTAGE)], cutoff)  # duplicate
+
+    stored = repository.minecraft_samples_since(now - timedelta(days=60))
+    assert stored == [(recent, PublicStatus.OUTAGE)]

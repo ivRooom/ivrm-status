@@ -89,11 +89,19 @@ class MinecraftSource:
             meta=meta,
         )
 
-    def history_samples(
+    def collector_samples(
         self,
         start: datetime,
         end: datetime,
     ) -> list[tuple[datetime, PublicStatus]]:
+        """Samples written by the host collector (history.json + current.json)."""
+        return self._collector_samples(start, end)[0]
+
+    def _collector_samples(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[list[tuple[datetime, PublicStatus]], datetime | None, PublicStatus]:
         raw_history = self._read_json(self.history_path)
         items = (
             raw_history
@@ -126,6 +134,15 @@ class MinecraftSource:
                 key = current_collected_at.isoformat()
                 if key not in seen:
                     samples.append((current_collected_at, current_raw_status))
+
+        return samples, current_collected_at, current_raw_status
+
+    def history_samples(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, PublicStatus]]:
+        samples, current_collected_at, current_raw_status = self._collector_samples(start, end)
 
         if self.probe:
             probe_result = self.probe.check()
