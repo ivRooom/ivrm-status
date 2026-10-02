@@ -7,6 +7,7 @@ FastAPI・SQLiteで構成する、`status.ivrm.jp`のステータス受信・統
 - `POST /api/internal/status-ingest`: HMAC署名付き内部受信
 - `GET /api/status.json`: Minecraft / Herta Live Status + 公開Incident / Maintenance / Announcement
 - `GET /api/status-history.json`: 最大30日の稼働履歴 + 同期間の公開CMS content
+  - 日別集計は日本時間（`Asia/Tokyo`）の暦日単位。`range.timezone`で集計タイムゾーンを返します。
 - `GET /healthz`: APIとSQLiteの疎通確認
 
 ## Public CMS Feed
