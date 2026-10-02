@@ -246,6 +246,7 @@ class PublicHistoryRange(BaseModel):
     from_date: date
     to_date: date
     timezone: str = "Asia/Tokyo"
+    min_impact_seconds: int = Field(default=0, ge=0)
 
 
 class PublicHistoryResponse(BaseModel):
