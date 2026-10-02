@@ -11,6 +11,15 @@ FastAPI・SQLiteで構成する、`status.ivrm.jp`のステータス受信・統
   - 日の状態と、`/api/status.json`の24時間タイムライン（1時間bucket）は、`STATUS_HISTORY_MIN_IMPACT_SECONDS`（既定300秒）以上続いた影響だけを反映します。観測が1件だけの断続は、継続中でない限り無視します（観測間隔が長いと、1件では続いたか分からないため）。再起動などの短い断続で1日が「停止」になるのを防ぐためです。`availability_percent`は従来どおり観測数ベースで、`range.min_impact_seconds`に基準を返します。
 - `GET /healthz`: APIとSQLiteの疎通確認
 
+### Minecraftの履歴の蓄積
+
+ホストのcollectorが書く`history.json`は直近24時間分しか保持しません。そのため、Status APIは読み取ったcollectorの観測値を`minecraft_samples`テーブル（SQLite）へ保存し、`STATUS_HISTORY_RETENTION_DAYS`（既定30日）分の日別履歴に使います。
+
+- `/api/status.json`の取得時（最大60秒に1回）と`/api/status-history.json`の取得時に保存します。24時間以内に1回でもアクセスがあれば、観測値を取りこぼしません。
+- 保存はbest effortです。失敗してもライブ表示と履歴の応答は続けます。
+- 保存を始める前の日は復元できないため、「確認中」のままです。
+- Status APIのコンテナの`/data`（`docker-compose.yml`でホストへマウント済み）に保存されます。
+
 ## Public CMS Feed
 
 公開Incident / Maintenance / Announcementの編集Source of Truthは`console.ivrm.jp` / Supabase `ivrm-core`です。

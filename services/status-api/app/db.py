@@ -80,6 +80,13 @@ class StatusRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_replay_requests_expires
                     ON replay_requests(expires_at);
+
+                CREATE TABLE IF NOT EXISTS minecraft_samples (
+                    collected_at TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('operational', 'maintenance', 'degraded', 'outage', 'unknown')
+                    )
+                );
                 """
             )
             now = datetime.now(UTC).isoformat()
@@ -170,6 +177,34 @@ class StatusRepository:
                 (retention_cutoff.isoformat(),),
             )
             connection.commit()
+
+    def save_minecraft_samples(
+        self,
+        samples: list[tuple[datetime, PublicStatus]],
+        retention_cutoff: datetime,
+    ) -> None:
+        """Keep collector samples ourselves: the collector's history.json only holds ~24h."""
+        with self.connect() as connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO minecraft_samples (collected_at, status) VALUES (?, ?)",
+                [
+                    (at.astimezone(UTC).isoformat(timespec="microseconds"), status.value)
+                    for at, status in samples
+                ],
+            )
+            connection.execute(
+                "DELETE FROM minecraft_samples WHERE collected_at < ?",
+                (retention_cutoff.astimezone(UTC).isoformat(timespec="microseconds"),),
+            )
+            connection.commit()
+
+    def minecraft_samples_since(self, since: datetime) -> list[tuple[datetime, PublicStatus]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT collected_at, status FROM minecraft_samples WHERE collected_at >= ? ORDER BY collected_at ASC",
+                (since.astimezone(UTC).isoformat(timespec="microseconds"),),
+            ).fetchall()
+        return [(datetime.fromisoformat(row["collected_at"]), PublicStatus(row["status"])) for row in rows]
 
     def latest_snapshot(self, service_id: str) -> Snapshot | None:
         with self.connect() as connection:
