@@ -38,7 +38,7 @@
             <p id="overallMessage">ivRooomが提供するサービスの現在の稼働状況を取得しています。</p>
           </div>
           <div class="status-hero-meta" aria-label="更新情報">
-            <div><span>最終更新</span><strong id="lastUpdated">--:--</strong></div>
+            <div><span>最終更新</span><strong id="lastUpdated">--:--</strong><small class="freshness-text" id="freshnessText">取得中</small></div>
             <div><span>次回更新</span><strong id="nextRefresh">60秒後</strong></div>
           </div>
           <div class="hero-orbit" aria-hidden="true"><div class="orbit-ring orbit-ring-a"></div><div class="orbit-ring orbit-ring-b"></div><div class="orbit-core"><span></span></div></div>
@@ -47,7 +47,7 @@
           <div class="summary-item"><span>監視対象</span><strong id="serviceCount">--</strong></div>
           <div class="summary-item"><span>正常稼働</span><strong id="operationalCount">--</strong></div>
           <div class="summary-item"><span>進行中の障害</span><strong id="activeIncidentCount">--</strong></div>
-          <div class="summary-item summary-item-wide"><span>データの鮮度</span><strong id="freshnessText">取得中</strong></div>
+          <div class="summary-item"><span>24時間の影響</span><strong id="impactHoursText">--</strong></div>
         </section>
         <nav class="history-route" aria-label="稼働履歴ページへのリンク">
           <a href="/history/">
@@ -61,7 +61,7 @@
           <div class="service-groups" id="serviceGroups" aria-live="polite"><div class="loading-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>
         </section>
         <section class="minecraft-feature" id="minecraftFeature" hidden aria-labelledby="minecraftFeatureTitle">
-          <div class="minecraft-feature-copy"><div class="feature-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m8 13 16-9 16 9v22l-16 9-16-9z"/><path d="m8 13 16 9 16-9M24 22v22"/></svg></div><div><p class="section-label">MINECRAFT NETWORK</p><h2 id="minecraftFeatureTitle">Minecraftサーバー</h2><p id="minecraftMode">サーバー情報を取得中です</p></div></div>
+          <div class="minecraft-feature-copy"><div class="feature-icon" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="m8 13 16-9 16 9v22l-16 9-16-9z"/><path d="m8 13 16 9 16-9M24 22v22"/></svg></div><div><p class="section-label">MINECRAFT NETWORK</p><h2 id="minecraftFeatureTitle">Minecraftサーバー</h2><p class="minecraft-feature-lead">接続先と各サーバーの起動状態</p><p id="minecraftMode" hidden>サーバー情報を取得中です</p></div></div>
           <div class="minecraft-feature-data">
             <div class="feature-stat"><span>オンライン</span><strong><b id="playersOnline">0</b><small> / <span id="playersMax">--</span></small></strong></div>
             <button class="address-button" id="copyAddressButton" type="button"><span>接続先</span><code id="serverAddress">mc.ivrm.jp</code><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>

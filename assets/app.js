@@ -348,6 +348,18 @@ function renderIncidents(incidents) {
   }).join("");
 }
 
+// Hours in the last 24h where at least one service was impacted.
+function impactHoursLabel(services) {
+  if (!services.length) return "--";
+  const impacted = new Set();
+  for (const service of services) {
+    service.timeline.slice(-24).forEach((status, index) => {
+      if (["maintenance", "degraded", "outage"].includes(normalizeStatus(status))) impacted.add(index);
+    });
+  }
+  return impacted.size ? `${impacted.size}時間` : "なし";
+}
+
 function render(snapshot) {
   state.snapshot = snapshot;
 
@@ -361,6 +373,7 @@ function render(snapshot) {
   $("overallMessage").textContent = snapshot?.message?.trim() || copy.message;
   $("lastUpdated").textContent = formatTime(snapshot?.generated_at);
   $("freshnessText").textContent = freshnessLabel(collectedSeconds);
+  $("freshnessText").classList.toggle("stale", collectedSeconds > STALE_AFTER_SECONDS);
   $("footerTimestamp").textContent = `Updated ${formatDateTime(snapshot?.generated_at, true)}`;
 
   const services = snapshot?.services || [];
@@ -370,6 +383,8 @@ function render(snapshot) {
   $("serviceCount").textContent = String(services.length);
   $("operationalCount").textContent = `${operationalCount} / ${services.length}`;
   $("activeIncidentCount").textContent = String(activeIncidents.length);
+  const impactHoursText = $("impactHoursText");
+  if (impactHoursText) impactHoursText.textContent = impactHoursLabel(services);
 
   renderServiceGroups(services);
   renderMinecraftFeature(services);
