@@ -245,6 +245,7 @@ class PublicHistoryRange(BaseModel):
     days: int = Field(ge=1, le=30)
     from_date: date
     to_date: date
+    timezone: str = "Asia/Tokyo"
 
 
 class PublicHistoryResponse(BaseModel):

@@ -119,9 +119,14 @@ function recordRange(record) {
   return [start, end];
 }
 
-// Public incidents / maintenance that affected this service on this day (days are aggregated in UTC).
+// The API aggregates days in range.timezone (Asia/Tokyo); older responses without it used UTC.
+function historyIsJst() {
+  return latestHistory?.range?.timezone === "Asia/Tokyo";
+}
+
+// Public incidents / maintenance that affected this service on this calendar day.
 function relatedRecords(day, service) {
-  const dayStart = new Date(`${day.date}T00:00:00Z`).getTime();
+  const dayStart = new Date(`${day.date}T00:00:00${historyIsJst() ? "+09:00" : "Z"}`).getTime();
   const dayEnd = dayStart + DAY_MS;
   return [...asArray(latestHistory?.incidents), ...asArray(latestHistory?.maintenance)].filter((record) => {
     if (!publicRecordServiceIds(record).includes(service.id)) return false;
@@ -207,7 +212,7 @@ function openDayPopover(button, day, service) {
     }
     popover.append(detail);
   }
-  popover.append(textElement("p", "timeline-popover-time", "日付はUTC基準で集計しています"));
+  popover.append(textElement("p", "timeline-popover-time", historyIsJst() ? "日付は日本時間で集計しています" : "日付はUTC基準で集計しています"));
   popover.hidden = false;
   positionDayPopover();
 }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 
 from .config import Settings
 from .db import Snapshot, StatusRepository
@@ -21,6 +21,11 @@ from .models import (
     worst_status,
 )
 from .public_content import PublicContentSource
+
+# Daily history is aggregated on Japan calendar days. JST has no DST, so a fixed
+# offset avoids depending on tzdata being present in the container image.
+HISTORY_TIMEZONE_NAME = "Asia/Tokyo"
+HISTORY_TIMEZONE = timezone(timedelta(hours=9), "JST")
 
 
 class StatusService:
@@ -91,8 +96,10 @@ class StatusService:
             raise ValueError("days must be between 1 and 30")
 
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
-        start_date = generated_at.date() - timedelta(days=days - 1)
-        start = datetime.combine(start_date, time.min, tzinfo=UTC)
+        today = generated_at.astimezone(HISTORY_TIMEZONE).date()
+        start_date = today - timedelta(days=days - 1)
+        # Keep the bound in UTC: snapshots_since compares ISO strings in SQLite.
+        start = datetime.combine(start_date, time.min, tzinfo=HISTORY_TIMEZONE).astimezone(UTC)
         current_status = self.public_status(generated_at)
         current_services = {service.id: service for service in current_status.services}
 
@@ -118,7 +125,8 @@ class StatusService:
             range=PublicHistoryRange(
                 days=days,
                 from_date=start_date,
-                to_date=generated_at.date(),
+                to_date=today,
+                timezone=HISTORY_TIMEZONE_NAME,
             ),
             services=[
                 PublicHistoryService(
@@ -297,7 +305,7 @@ class StatusService:
             start_date + timedelta(days=index): [] for index in range(days)
         }
         for recorded_at, status in samples:
-            sample_date = recorded_at.astimezone(UTC).date()
+            sample_date = recorded_at.astimezone(HISTORY_TIMEZONE).date()
             if sample_date in buckets:
                 buckets[sample_date].append(status)
 

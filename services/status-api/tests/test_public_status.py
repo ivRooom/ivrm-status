@@ -104,3 +104,28 @@ def test_healthz_checks_sqlite(client: TestClient) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_public_history_groups_days_by_japan_calendar_date(settings: Settings) -> None:
+    repository = StatusRepository(settings.db_path)
+    repository.initialize(settings.herta_stale_after_seconds)
+    # 2026-10-01 16:30 UTC is 2026-10-02 01:30 JST.
+    sample_at = datetime(2026, 10, 1, 16, 30, tzinfo=UTC)
+    now = datetime(2026, 10, 1, 17, 0, tzinfo=UTC)
+    repository.save_ingest(
+        IngestPayload.model_validate(payload(status="outage", checked_at=sample_at.isoformat())),
+        request_id="33333333-3333-4333-8333-333333333333",
+        received_at=sample_at,
+        replay_ttl_seconds=settings.replay_ttl_seconds,
+        history_retention_days=settings.history_retention_days,
+    )
+
+    result = StatusService(settings, repository).public_history(days=2, now=now)
+
+    assert result.range.timezone == "Asia/Tokyo"
+    assert str(result.range.to_date) == "2026-10-02"
+    herta = next(service for service in result.services if service.id == "herta-discord-bot")
+    days = {str(day.date): day for day in herta.days}
+    assert days["2026-10-02"].status.value == "outage"
+    assert days["2026-10-02"].samples == 1
+    assert days["2026-10-01"].samples == 0
