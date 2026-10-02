@@ -6,8 +6,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .impact import bucket_statuses
 from .minecraft_probe import MinecraftProbeResult, MinecraftStatusProbe
-from .models import PublicService, PublicStatus, worst_status
+from .models import PublicService, PublicStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class MinecraftSource:
     history_path: Path
     stale_after_seconds: int
     probe: MinecraftStatusProbe | None = None
+    min_impact_seconds: int = 0
 
     def public_service(self, now: datetime) -> PublicService:
         current = self._read_json(self.current_path)
@@ -212,18 +214,18 @@ class MinecraftSource:
         if not isinstance(history, list):
             return [PublicStatus.UNKNOWN] * 24
 
-        buckets: list[list[PublicStatus]] = [[] for _ in range(24)]
         start = now - timedelta(hours=24)
+        samples: list[tuple[datetime, PublicStatus]] = []
         for item in history:
             if not isinstance(item, dict):
                 continue
             collected_at = self._parse_datetime(item.get("collected_at"))
             if collected_at is None or collected_at < start or collected_at > now:
                 continue
-            index = min(23, int((collected_at - start).total_seconds() // 3600))
-            buckets[index].append(self._normalize_status(item.get("status")))
+            samples.append((collected_at, self._normalize_status(item.get("status"))))
 
-        return [worst_status(bucket) if bucket else PublicStatus.UNKNOWN for bucket in buckets]
+        starts = [start + timedelta(hours=index) for index in range(24)]
+        return bucket_statuses(samples, starts, timedelta(hours=1), self.min_impact_seconds, now)
 
     @staticmethod
     def _read_json(path: Path) -> Any:

@@ -8,7 +8,7 @@ FastAPI・SQLiteで構成する、`status.ivrm.jp`のステータス受信・統
 - `GET /api/status.json`: Minecraft / Herta Live Status + 公開Incident / Maintenance / Announcement
 - `GET /api/status-history.json`: 最大30日の稼働履歴 + 同期間の公開CMS content
   - 日別集計は日本時間（`Asia/Tokyo`）の暦日単位。`range.timezone`で集計タイムゾーンを返します。
-  - 日の状態は、`STATUS_HISTORY_MIN_IMPACT_SECONDS`（既定300秒）以上続いた影響だけを反映します。再起動などの短い断続で1日が「停止」になるのを防ぐためです。`availability_percent`は従来どおり観測数ベースで、`range.min_impact_seconds`に基準を返します。
+  - 日の状態と、`/api/status.json`の24時間タイムライン（1時間bucket）は、`STATUS_HISTORY_MIN_IMPACT_SECONDS`（既定300秒）以上続いた影響だけを反映します。観測が1件だけの断続は、継続中でない限り無視します（観測間隔が長いと、1件では続いたか分からないため）。再起動などの短い断続で1日が「停止」になるのを防ぐためです。`availability_percent`は従来どおり観測数ベースで、`range.min_impact_seconds`に基準を返します。
 - `GET /healthz`: APIとSQLiteの疎通確認
 
 ## Public CMS Feed
