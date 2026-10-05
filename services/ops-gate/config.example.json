@@ -1,0 +1,25 @@
+{
+  "approver_discord_ids": ["REPLACE_WITH_APPROVER_DISCORD_USER_ID"],
+  "ticket_secret_file": "/etc/ivrm-ops-gate/ticket-secret",
+  "state_dir": "/var/lib/ivrm-ops-gate",
+  "audit_log": "/var/log/ivrm-ops-gate/audit.jsonl",
+  "max_ticket_age_seconds": 900,
+  "operations": {
+    "start_mc_resource": {
+      "argv": [],
+      "timeout_seconds": 180,
+      "cooldown_seconds": 300
+    },
+    "restart_mc_main": {
+      "argv": [],
+      "timeout_seconds": 300,
+      "cooldown_seconds": 1800,
+      "precheck_argv": []
+    },
+    "restart_herta": {
+      "argv": [],
+      "timeout_seconds": 120,
+      "cooldown_seconds": 600
+    }
+  }
+}
