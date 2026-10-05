@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+import time as monotonic_time
 from datetime import UTC, date, datetime, time, timedelta, timezone
 
 from .config import Settings
 from .db import Snapshot, StatusRepository
+from .impact import bucket_statuses, significant_impacts
 from .minecraft import MinecraftSource
 from .minecraft_probe import MinecraftStatusProbe
 from .models import (
@@ -28,10 +31,15 @@ HISTORY_TIMEZONE_NAME = "Asia/Tokyo"
 HISTORY_TIMEZONE = timezone(timedelta(hours=9), "JST")
 
 
+MINECRAFT_SYNC_INTERVAL_SECONDS = 60.0
+logger = logging.getLogger("ivrm_status_api")
+
+
 class StatusService:
     def __init__(self, settings: Settings, repository: StatusRepository) -> None:
         self.settings = settings
         self.repository = repository
+        self._last_minecraft_sync = float("-inf")
         minecraft_probe = (
             MinecraftStatusProbe(
                 connect_host=settings.minecraft_probe_connect_host,
@@ -48,6 +56,7 @@ class StatusService:
             history_path=settings.minecraft_history_path,
             stale_after_seconds=settings.minecraft_stale_after_seconds,
             probe=minecraft_probe,
+            min_impact_seconds=settings.history_min_impact_seconds,
         )
         self.public_content = PublicContentSource(
             feed_url=settings.public_content_feed_url,
@@ -57,8 +66,28 @@ class StatusService:
             stale_seconds=settings.public_content_stale_seconds,
         )
 
+    def _sync_minecraft_samples(self, now: datetime, *, force: bool = False) -> None:
+        """Persist the collector's samples; history.json only keeps about 24 hours.
+
+        Throttled because public_status() runs on every page refresh. Persistence
+        problems must never break the public endpoints.
+        """
+        current = monotonic_time.monotonic()
+        if not force and current - self._last_minecraft_sync < MINECRAFT_SYNC_INTERVAL_SECONDS:
+            return
+        self._last_minecraft_sync = current
+        try:
+            samples = self.minecraft.collector_samples(now - timedelta(hours=48), now)
+            self.repository.save_minecraft_samples(
+                samples,
+                now - timedelta(days=self.settings.history_retention_days),
+            )
+        except Exception:  # noqa: BLE001 - best effort, the live data is still served
+            logger.warning("minecraft_sample_persist_failed", exc_info=True)
+
     def public_status(self, now: datetime | None = None) -> PublicStatusResponse:
         generated_at = (now or datetime.now(UTC)).astimezone(UTC)
+        self._sync_minecraft_samples(generated_at)
         content = self.public_content.get(generated_at)
         services = [
             self.minecraft.public_service(generated_at),
@@ -105,10 +134,16 @@ class StatusService:
 
         minecraft = current_services["minecraft-network"]
         herta = current_services["herta-discord-bot"]
+        self._sync_minecraft_samples(generated_at, force=True)
         minecraft_days, minecraft_availability = self._daily_history(
-            self.minecraft.history_samples(start, generated_at),
+            self._merge_samples(
+                self.minecraft.history_samples(start, generated_at),
+                self.repository.minecraft_samples_since(start),
+            ),
             start_date,
             days,
+            self.settings.history_min_impact_seconds,
+            generated_at,
         )
         herta_days, herta_availability = self._daily_history(
             [
@@ -118,6 +153,8 @@ class StatusService:
             ],
             start_date,
             days,
+            self.settings.history_min_impact_seconds,
+            generated_at,
         )
 
         return PublicHistoryResponse(
@@ -127,6 +164,7 @@ class StatusService:
                 from_date=start_date,
                 to_date=today,
                 timezone=HISTORY_TIMEZONE_NAME,
+                min_impact_seconds=self.settings.history_min_impact_seconds,
             ),
             services=[
                 PublicHistoryService(
@@ -165,6 +203,7 @@ class StatusService:
             self.repository.snapshots_since("herta-discord-bot", since),
             since,
             now,
+            self.settings.history_min_impact_seconds,
         )
 
         if latest is None:
@@ -205,15 +244,15 @@ class StatusService:
         snapshots: list[Snapshot],
         start: datetime,
         end: datetime,
+        min_impact_seconds: int = 0,
     ) -> list[PublicStatus]:
-        buckets: list[list[PublicStatus]] = [[] for _ in range(24)]
-        for snapshot in snapshots:
-            received = snapshot.received_at.astimezone(UTC)
-            if received < start or received > end:
-                continue
-            index = min(23, int((received - start).total_seconds() // 3600))
-            buckets[index].append(snapshot.status)
-        return [worst_status(bucket) if bucket else PublicStatus.UNKNOWN for bucket in buckets]
+        samples = [
+            (snapshot.received_at.astimezone(UTC), snapshot.status)
+            for snapshot in snapshots
+            if start <= snapshot.received_at.astimezone(UTC) <= end
+        ]
+        starts = [start + timedelta(hours=index) for index in range(24)]
+        return bucket_statuses(samples, starts, timedelta(hours=1), min_impact_seconds, end)
 
     @staticmethod
     def _timeline_details(
@@ -296,11 +335,29 @@ class StatusService:
         ]
 
     @staticmethod
+    def _merge_samples(
+        *sources: list[tuple[datetime, PublicStatus]],
+    ) -> list[tuple[datetime, PublicStatus]]:
+        merged: dict[datetime, PublicStatus] = {}
+        for source in sources:
+            for at, status in source:
+                merged.setdefault(at.astimezone(UTC), status)
+        return sorted(merged.items(), key=lambda item: item[0])
+
+    @staticmethod
     def _daily_history(
         samples: list[tuple[datetime, PublicStatus]],
         start_date: date,
         days: int,
+        min_impact_seconds: int = 0,
+        end: datetime | None = None,
     ) -> tuple[list[PublicHistoryDay], float | None]:
+        """Daily status on Japan calendar days.
+
+        A day is marked impacted only by an outage/degradation/maintenance run that
+        lasted at least min_impact_seconds, so brief restarts do not turn a whole day
+        red. availability_percent is still the plain share of operational samples.
+        """
         buckets: dict[date, list[PublicStatus]] = {
             start_date + timedelta(days=index): [] for index in range(days)
         }
@@ -308,6 +365,20 @@ class StatusService:
             sample_date = recorded_at.astimezone(HISTORY_TIMEZONE).date()
             if sample_date in buckets:
                 buckets[sample_date].append(status)
+
+        impacted: dict[date, list[PublicStatus]] = {day: [] for day in buckets}
+        for run_start, run_end, status in significant_impacts(
+            samples,
+            min_impact_seconds,
+            end or max((at for at, _ in samples), default=datetime.now(UTC)),
+        ):
+            first = run_start.astimezone(HISTORY_TIMEZONE).date()
+            last = run_end.astimezone(HISTORY_TIMEZONE).date()
+            day = first
+            while day <= last:
+                if day in impacted:
+                    impacted[day].append(status)
+                day += timedelta(days=1)
 
         result: list[PublicHistoryDay] = []
         operational_total = 0
@@ -319,7 +390,13 @@ class StatusService:
             result.append(
                 PublicHistoryDay(
                     date=day,
-                    status=worst_status(known) if known else PublicStatus.UNKNOWN,
+                    status=(
+                        worst_status(impacted[day])
+                        if impacted[day]
+                        else PublicStatus.OPERATIONAL
+                        if known
+                        else PublicStatus.UNKNOWN
+                    ),
                     samples=len(values),
                     availability_percent=day_availability,
                 )

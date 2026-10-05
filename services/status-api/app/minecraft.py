@@ -6,8 +6,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .impact import bucket_statuses
 from .minecraft_probe import MinecraftProbeResult, MinecraftStatusProbe
-from .models import PublicService, PublicStatus, worst_status
+from .models import PublicService, PublicStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class MinecraftSource:
     history_path: Path
     stale_after_seconds: int
     probe: MinecraftStatusProbe | None = None
+    min_impact_seconds: int = 0
 
     def public_service(self, now: datetime) -> PublicService:
         current = self._read_json(self.current_path)
@@ -87,11 +89,19 @@ class MinecraftSource:
             meta=meta,
         )
 
-    def history_samples(
+    def collector_samples(
         self,
         start: datetime,
         end: datetime,
     ) -> list[tuple[datetime, PublicStatus]]:
+        """Samples written by the host collector (history.json + current.json)."""
+        return self._collector_samples(start, end)[0]
+
+    def _collector_samples(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> tuple[list[tuple[datetime, PublicStatus]], datetime | None, PublicStatus]:
         raw_history = self._read_json(self.history_path)
         items = (
             raw_history
@@ -124,6 +134,15 @@ class MinecraftSource:
                 key = current_collected_at.isoformat()
                 if key not in seen:
                     samples.append((current_collected_at, current_raw_status))
+
+        return samples, current_collected_at, current_raw_status
+
+    def history_samples(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> list[tuple[datetime, PublicStatus]]:
+        samples, current_collected_at, current_raw_status = self._collector_samples(start, end)
 
         if self.probe:
             probe_result = self.probe.check()
@@ -212,18 +231,18 @@ class MinecraftSource:
         if not isinstance(history, list):
             return [PublicStatus.UNKNOWN] * 24
 
-        buckets: list[list[PublicStatus]] = [[] for _ in range(24)]
         start = now - timedelta(hours=24)
+        samples: list[tuple[datetime, PublicStatus]] = []
         for item in history:
             if not isinstance(item, dict):
                 continue
             collected_at = self._parse_datetime(item.get("collected_at"))
             if collected_at is None or collected_at < start or collected_at > now:
                 continue
-            index = min(23, int((collected_at - start).total_seconds() // 3600))
-            buckets[index].append(self._normalize_status(item.get("status")))
+            samples.append((collected_at, self._normalize_status(item.get("status"))))
 
-        return [worst_status(bucket) if bucket else PublicStatus.UNKNOWN for bucket in buckets]
+        starts = [start + timedelta(hours=index) for index in range(24)]
+        return bucket_statuses(samples, starts, timedelta(hours=1), self.min_impact_seconds, now)
 
     @staticmethod
     def _read_json(path: Path) -> Any:

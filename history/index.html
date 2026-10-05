@@ -63,7 +63,7 @@
         <section class="section-block history-section" aria-labelledby="serviceHistoryTitle">
           <div class="section-heading">
             <div><p class="section-label">UPTIME</p><h2 id="serviceHistoryTitle">サービス別履歴</h2></div>
-            <p>色付きのセルは、その日に観測された最も影響の大きい状態を示します。データがない日は「確認中」として表示します。</p>
+            <p id="historyLegendNote">色付きのセルは、その日に観測された最も影響の大きい状態を示します。データがない日は「確認中」として表示します。</p>
           </div>
           <div class="history-legend" aria-label="ステータス凡例">
             <span><i data-status="operational"></i>稼働中</span>
@@ -121,7 +121,7 @@
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/assets/api-fetch-guard.js?v=20261002-1"></script>
-    <script type="module" src="/assets/history.js?v=20261002-2"></script>
+    <script type="module" src="/assets/history.js?v=20261002-3"></script>
     <script type="module" src="/assets/history-portal.js?v=20261002-1"></script>
   </body>
 </html>

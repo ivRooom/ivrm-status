@@ -41,6 +41,7 @@ class Settings:
     replay_ttl_seconds: int = 600
     rate_limit_per_minute: int = 10
     history_retention_days: int = 30
+    history_min_impact_seconds: int = 300
     herta_stale_after_seconds: int = 120
     minecraft_stale_after_seconds: int = 300
     minecraft_current_path: Path = Path("/data/minecraft/current.json")
@@ -75,6 +76,7 @@ class Settings:
             replay_ttl_seconds=_env_int("INGEST_REPLAY_TTL_SECONDS", 600),
             rate_limit_per_minute=_env_int("INGEST_RATE_LIMIT_PER_MINUTE", 10),
             history_retention_days=_env_int("STATUS_HISTORY_RETENTION_DAYS", 30),
+            history_min_impact_seconds=_env_int("STATUS_HISTORY_MIN_IMPACT_SECONDS", 300, minimum=0),
             herta_stale_after_seconds=_env_int("HERTA_STALE_AFTER_SECONDS", 120),
             minecraft_stale_after_seconds=_env_int("MINECRAFT_STALE_AFTER_SECONDS", 300),
             minecraft_current_path=Path(
