@@ -172,11 +172,12 @@ def analyze(
 
     ledger.check(moment)  # raises BudgetExceeded before any paid call
     request = build_request(settings, snapshot)
-    # Reserve a conservative amount durably before the call: characters over-estimate
-    # tokens for English and are about right for Japanese, and the output cap is known.
+    # Reserve a conservative amount durably before the call. UTF-8 bytes are an upper bound
+    # for tokens (a token is at least one byte, so emoji and rare scripts cannot exceed it),
+    # and the output cap is known.
     reservation = ledger.reserve(
         moment,
-        input_tokens=len(json.dumps(request, ensure_ascii=False)),
+        input_tokens=len(json.dumps(request, ensure_ascii=False).encode("utf-8")),
         output_tokens=settings.max_output_tokens,
     )
     try:
@@ -189,13 +190,23 @@ def analyze(
         # the reservation stays on the ledger.
         raise AnalysisFailed(f"bedrock call failed: {type(exc).__name__}{f' ({code})' if code else ''}") from None
 
-    usage = response.get("usage", {}) if isinstance(response, dict) else {}
-    cost = ledger.settle(
-        moment,
-        reservation,
-        input_tokens=int(usage.get("inputTokens", 0)),
-        output_tokens=int(usage.get("outputTokens", 0)),
-    )  # settled even if the output is rejected below: the call was paid for
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if (
+        isinstance(usage, dict)
+        and isinstance(usage.get("inputTokens"), int)
+        and isinstance(usage.get("outputTokens"), int)
+    ):
+        cost = ledger.settle(
+            moment,
+            reservation,
+            input_tokens=usage["inputTokens"],
+            output_tokens=usage["outputTokens"],
+        )  # settled even if the output is rejected below: the call was paid for
+    else:
+        # No usable usage numbers: do not offset the reservation with a zero. It stays on the
+        # ledger as the conservative charge.
+        logger.warning("ops_agent_usage_missing reservation=%s", reservation.id)
+        cost = reservation.cost_jpy
 
     for block in response.get("output", {}).get("message", {}).get("content", []):
         tool_use = block.get("toolUse") if isinstance(block, dict) else None

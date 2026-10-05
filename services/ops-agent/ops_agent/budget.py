@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterator
 
 from .config import Settings
 
@@ -33,6 +36,31 @@ def cost_jpy(settings: Settings, input_tokens: int, output_tokens: int) -> float
 
 def _month_key(moment: datetime) -> str:
     return moment.astimezone(JST).strftime("%Y-%m")
+
+
+@contextmanager
+def _exclusive(path: Path) -> Iterator[None]:
+    """Cross-process lock around check-then-append, so two runs cannot both pass the check."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".lock", "a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 class BudgetLedger:
@@ -82,16 +110,24 @@ class BudgetLedger:
         """
         cost = cost_jpy(self.settings, input_tokens, output_tokens)
         reservation = Reservation(id=uuid.uuid4().hex, cost_jpy=cost)
-        self._append(
-            {
-                "kind": "reservation",
-                "id": reservation.id,
-                "at": now.astimezone(timezone.utc).isoformat(),
-                "month": _month_key(now),
-                "model": self.settings.bedrock_model_id,
-                "cost_jpy": round(cost, 4),
-            }
-        )
+        with _exclusive(self.path):
+            spent = self.month_spent_jpy(now)
+            budget = self.settings.monthly_budget_jpy
+            if spent + cost > budget:
+                # Refuse before the call: this reservation would not fit in what is left.
+                raise BudgetExceeded(
+                    f"reservation does not fit the monthly budget: {spent:.1f} + {cost:.1f} > {budget:.0f} JPY"
+                )
+            self._append(
+                {
+                    "kind": "reservation",
+                    "id": reservation.id,
+                    "at": now.astimezone(timezone.utc).isoformat(),
+                    "month": _month_key(now),
+                    "model": self.settings.bedrock_model_id,
+                    "cost_jpy": round(cost, 4),
+                }
+            )
         return reservation
 
     def settle(

@@ -49,7 +49,9 @@ def main(argv: list[str] | None = None) -> int:
         bedrock = boto3.client(
             "bedrock-runtime",
             region_name=settings.bedrock_region,
-            config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 2, "mode": "standard"}),
+            # No SDK retries: a retry after a read timeout can be billed again, and the budget
+            # reservation covers exactly one attempt.
+            config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 0, "mode": "standard"}),
         )
     except Exception as exc:  # noqa: BLE001 - e.g. missing credentials; report only the type
         return _fail("analysis_failed", f"bedrock client setup failed: {type(exc).__name__}", 3)
