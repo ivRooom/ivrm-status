@@ -27,6 +27,20 @@ SYSTEM_PROMPT = """\
 """
 
 
+# Errors Bedrock returns before it processes (and bills) a request.
+NOT_BILLED_CODES = frozenset(
+    {"ThrottlingException", "AccessDeniedException", "ValidationException", "ResourceNotFoundException"}
+)
+
+
+def _error_code(exc: Exception) -> str | None:
+    response = getattr(exc, "response", None)
+    if isinstance(response, dict):
+        code = response.get("Error", {}).get("Code")
+        return code if isinstance(code, str) else None
+    return None
+
+
 class BedrockClient(Protocol):
     def converse(self, **kwargs: Any) -> dict[str, Any]: ...
 
@@ -115,8 +129,17 @@ def compact_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _embed_safe(payload: str) -> str:
+    """Make the JSON unable to contain the <data> delimiters.
+
+    json.dumps leaves < and > alone, so a title like "</data> ..." would close the
+    untrusted-data region early. Use the equivalent JSON escapes instead.
+    """
+    return payload.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
 def build_request(settings: Settings, snapshot: dict[str, Any]) -> dict[str, Any]:
-    payload = json.dumps(compact_snapshot(snapshot), ensure_ascii=False, separators=(",", ":"))
+    payload = _embed_safe(json.dumps(compact_snapshot(snapshot), ensure_ascii=False, separators=(",", ":")))
     return {
         "modelId": settings.bedrock_model_id,
         "system": [{"text": SYSTEM_PROMPT}],
@@ -148,14 +171,31 @@ def analyze(
         return Outcome(skipped=True, reason="all services operational")
 
     ledger.check(moment)  # raises BudgetExceeded before any paid call
-    response = bedrock.converse(**build_request(settings, snapshot))
+    request = build_request(settings, snapshot)
+    # Reserve a conservative amount durably before the call: characters over-estimate
+    # tokens for English and are about right for Japanese, and the output cap is known.
+    reservation = ledger.reserve(
+        moment,
+        input_tokens=len(json.dumps(request, ensure_ascii=False)),
+        output_tokens=settings.max_output_tokens,
+    )
+    try:
+        response = bedrock.converse(**request)
+    except Exception as exc:  # noqa: BLE001 - normalised below; never leaks request or credentials
+        code = _error_code(exc)
+        if code in NOT_BILLED_CODES:
+            ledger.settle(moment, reservation, input_tokens=None, output_tokens=None)
+        # Anything else (timeouts, dropped connections) may have been processed and billed:
+        # the reservation stays on the ledger.
+        raise AnalysisFailed(f"bedrock call failed: {type(exc).__name__}{f' ({code})' if code else ''}") from None
 
     usage = response.get("usage", {}) if isinstance(response, dict) else {}
-    cost = ledger.record(
+    cost = ledger.settle(
         moment,
+        reservation,
         input_tokens=int(usage.get("inputTokens", 0)),
         output_tokens=int(usage.get("outputTokens", 0)),
-    )  # recorded even if the output is rejected below: the call was paid for
+    )  # settled even if the output is rejected below: the call was paid for
 
     for block in response.get("output", {}).get("message", {}).get("content", []):
         tool_use = block.get("toolUse") if isinstance(block, dict) else None

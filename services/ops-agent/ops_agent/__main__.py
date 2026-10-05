@@ -45,11 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     import boto3  # imported late: --dry-run and the healthy path need no AWS setup
     from botocore.config import Config
 
-    bedrock = boto3.client(
-        "bedrock-runtime",
-        region_name=settings.bedrock_region,
-        config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 2, "mode": "standard"}),
-    )
+    try:
+        bedrock = boto3.client(
+            "bedrock-runtime",
+            region_name=settings.bedrock_region,
+            config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 2, "mode": "standard"}),
+        )
+    except Exception as exc:  # noqa: BLE001 - e.g. missing credentials; report only the type
+        return _fail("analysis_failed", f"bedrock client setup failed: {type(exc).__name__}", 3)
     try:
         outcome = analyze(settings, bedrock, snapshot, BudgetLedger(settings), force=args.force)
     except BudgetExceeded as exc:
