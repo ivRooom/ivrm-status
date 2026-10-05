@@ -37,3 +37,12 @@ jobs:
 
       - name: Test (Bedrock is faked; no AWS access)
         run: pytest
+
+  ai-draft-actor-migration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test the AI draft actor migration (throwaway Postgres, no real database)
+        run: bash services/ops-agent/supabase/test-ai-draft-actor.sh
