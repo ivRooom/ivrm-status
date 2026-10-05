@@ -49,7 +49,7 @@ Phase 0（読み取り専用の分析）は `services/ops-agent/` に、サー�
 [ops-agent]（新規・別プロセス）
   Bedrock Converse + tool use
   ├─ 読み取りtool（状態・履歴・ログ）
-  ├─ propose_announcement_draft
+  ├─ propose_announcement_draft / propose_incident_draft
   └─ propose_action
         │
         ├────────────── 下書き ──▶ api.ivrm.jp ──▶ Supabase create_status_*_v1（draftのみ）
@@ -71,9 +71,9 @@ Phase 0（読み取り専用の分析）は `services/ops-agent/` に、サー�
 
 開発中のサーバー再起動やデプロイは日常的に起きる。これを「障害の兆候」と誤認すると、不要な下書きや操作の提案が出るため、次のルールで抑える。
 
-- 公開履歴と同じ考え方で、**一定時間以上続いた**非正常だけを起動条件にする。基準は履歴の `STATUS_HISTORY_MIN_IMPACT_SECONDS`（既定300秒）と揃える。
+- 公開履歴と同じ考え方で、**一定時間以上続いた**非正常だけを起動条件にする。基準は、Status APIの設定 `STATUS_HISTORY_MIN_IMPACT_SECONDS`（既定300秒。`services/status-api` に実装済み）と揃える。
 - 同じ状態変化では1回だけ起動する（回復するまで再起動しない）。
-- **登録済みのMaintenanceの期間中**は起動しない。計画的な作業は、先にメンテナンスとして登録する運用にする。
+- **登録済みのMaintenanceの期間中は、そのMaintenanceの対象サービス（`affected_service_ids`）についてだけ**起動しない。たとえばMinecraftのメンテナンス中でも、無関係なHertaの障害は通常どおり扱う。計画的な作業は、先にメンテナンスとして登録する運用にする。
 - 管理者が手動で一時停止（サイレンス）できる。期限付きで、解除し忘れを防ぐ。
 - 抑制した場合も、理由を監査ログに残す（なぜ動かなかったかを後から追えるように）。
 
@@ -117,16 +117,18 @@ LLMが呼べるtoolはこの表だけ。ここにないものは存在しない�
 | `get_status_history` | 読み取り | `/api/status-history.json`（最大30日、JST日付） |
 | `get_service_logs` | 読み取り | 許可サービスの直近ログ（行数・文字数に上限、秘匿情報はマスク済み） |
 | `propose_announcement_draft` | 提案 | 種類（info/warning）、タイトル、本文、対象サービス。**公開はしない** |
+| `propose_incident_draft` | 提案 | タイトル、影響（impact）、対象サービス、発生時刻、概要。**公開しない。更新・解決もしない** |
 | `propose_action` | 提案 | `start_mc_resource` / `restart_mc_main` / `restart_herta` のいずれか＋理由 |
 
-`publish_*`、`resolve_*`、シェル実行に相当するtoolは**定義しない**。
+`publish_*`、`resolve_*`、メンテナンスの作成（`create_status_maintenance_v1`）、シェル実行に相当するtoolは**定義しない**。メンテナンスは計画的な作業の宣言なので、人が登録する。
 
 ## お知らせの下書き
 
 Supabase側の既存RPC（`create_status_announcement_v1` など）は、次の性質をすでに持っている。
 
 - 作成時の `publication_state` は常に `draft`
-- 冪等キー（`p_idempotency_key`）が必須で、同じ提案が二重に作られない
+- 冪等キー（`p_idempotency_key`）が必須。ただし、キーを毎回新しく作ると二重の下書きは防げない。**キーは、起動のきっかけから決定的に作る**: `UUIDv5(名前空間, "<状態変化のID>:<下書きの種類>")`。タイムアウト後の再試行や再実行で、LLMが文面を作り直しても同じキーになる。
+  - 同じキーで内容が違うと、RPCは冪等性の衝突（`23505`）を返す。agentはこれを「すでに下書き済み」として扱い、**別のキーで作り直さない**。
 - 作成時に `append_audit_log` で監査ログを残す
 - 公開は別RPC（`publish_status_announcement_v1`）で、agentには呼ばせない
 
@@ -178,7 +180,10 @@ RPCは `p_actor_email` / `p_actor_role` / `p_actor_discord_user_id` を必須と
 
 - 1回の分析あたりの `max_tokens` とtool呼び出し回数に上限。
 - 日次のBedrock利用上限と、トリガーのレート制限（同じ状態変化では1回だけ起動）。
-- 上限到達時は、LLMなしで「状態をそのまま通知する」fallbackにする。LLMが落ちてもStatus自体は影響を受けない。
+- 上限到達時や、Bedrockが使えないときは、**LLMなしのfallback**にする。LLMが落ちてもStatus自体は影響を受けない。
+  - 宛先: **承認者（オーナー本人）だけ**。通知チャネルは未決定（Discord DM / 管理画面の承認待ち一覧）。
+  - 内容: 現在の状態と24時間の推移を、そのままテンプレートで整形した文面（LLMの分析なし）。
+  - **公開はしない。** fallbackでも、お知らせ・Incidentの下書きは作らない（文面を作るのは人）。公開は、これまでどおり管理画面で人が行う。
 
 ### データの扱い
 
@@ -201,7 +206,8 @@ RPCは `p_actor_email` / `p_actor_role` / `p_actor_discord_user_id` を必須と
 
 ### IAM
 
-- ops-agent専用のIAMロールを作り、`bedrock:InvokeModel` / `InvokeModelWithResponseStream` を**使うプロファイルのARNだけ**に絞る。
+- ops-agent専用のIAMロールを作り、`bedrock:InvokeModel`（Converse APIでも同じ権限が使われる）を、**使うものだけ**に絞る。`jp.` のようなクロスリージョン推論プロファイルは、**プロファイルのARNだけでは足りず**、呼び出し元リージョンと、プロファイルの**すべての宛先リージョンにあるfoundation-modelのARN**にも許可が必要になる（足りないと `AccessDenied`）。使うプロファイルを決めたら、`GetInferenceProfile` で宛先のモデルARNを列挙して、その分だけを許可する（ワイルドカードでモデル全体を許可しない）。
+- 実際に許可が足りているかは、ロールで `python -m ops_agent --force` を1回実行して確認する。
 - 調査に使った現在のAWSセッションは**アカウントのrootとして認証されている**。このrootの認証情報を、アプリケーションやCIに配置してはならない。専用ロールを作り、短期認証情報（OIDC / ロールの引き受け）で使う。
 - OCI上のサービスからAWSへ接続する方法（長期キーを避けられるか）は未決定。
 
