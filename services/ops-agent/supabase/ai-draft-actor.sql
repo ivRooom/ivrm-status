@@ -22,6 +22,47 @@
 
 begin;
 
+-- Drift check for the admin validator. Step 3 below replaces status_actor_valid_v1 with a copy
+-- of the definition this proposal was written against. If production changed it since (a new
+-- role, new rules), refuse instead of silently overwriting the change: update this file first.
+do $drift$
+declare
+  current_def text;
+  expected_def constant text := $expected$
+CREATE OR REPLACE FUNCTION public.status_actor_valid_v1(p_actor_email text, p_actor_role text, p_actor_discord_user_id text)
+ RETURNS boolean
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  select
+    p_actor_role in ('administrator', 'owner')
+    and (
+      p_actor_email is null
+      or (
+        char_length(p_actor_email) between 3 and 320
+        and p_actor_email = lower(btrim(p_actor_email))
+      )
+    )
+    and (
+      p_actor_discord_user_id is null
+      or (
+        char_length(p_actor_discord_user_id) between 17 and 20
+        and p_actor_discord_user_id ~ '^[0-9]+$'
+      )
+    )
+    and (p_actor_email is not null or p_actor_discord_user_id is not null);
+$function$
+$expected$;
+begin
+  select pg_get_functiondef('public.status_actor_valid_v1(text,text,text)'::regprocedure) into current_def;
+  -- Collapse all whitespace (newlines, CRLF, indentation) first, then trim the ends.
+  if btrim(regexp_replace(current_def, '\s+', ' ', 'g')) is distinct from btrim(regexp_replace(expected_def, '\s+', ' ', 'g')) then
+    raise exception 'status_actor_valid_v1 has changed since this migration was written; review it and update the migration (expected the original definition)';
+  end if;
+end
+$drift$;
+
 create or replace function public.status_ai_draft_actor_valid_v1(
   p_actor_email text,
   p_actor_role text,

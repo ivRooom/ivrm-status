@@ -3,9 +3,16 @@
 -- The stubs only model the actor check; they are not the real RPC bodies.
 
 -- Roles that exist on Supabase but not on a plain Postgres.
-create role anon nologin;
-create role authenticated nologin;
-create role service_role nologin;
+do $roles$
+declare r text;
+begin
+  foreach r in array array['anon', 'authenticated', 'service_role'] loop
+    if not exists (select 1 from pg_roles where rolname = r) then
+      execute format('create role %I nologin', r);
+    end if;
+  end loop;
+end
+$roles$;
 
 create or replace function public.status_actor_valid_v1(p_actor_email text, p_actor_role text, p_actor_discord_user_id text)
  returns boolean

@@ -33,7 +33,22 @@ if run <"$here/ai-draft-actor.sql" 2>/tmp/second-run.err; then
   echo "second run unexpectedly succeeded" >&2
   exit 1
 fi
-grep -q "guard line expected once" /tmp/second-run.err
+# Either check may stop it first: the validator no longer matches the original, or the guard line is gone.
+grep -Eq "has changed since this migration was written|guard line expected once" /tmp/second-run.err
 
 echo "== assertions"
 run <"$here/test-assertions.sql"
+
+echo "== drift: if production changed the admin validator, the migration must refuse"
+docker exec "$name" createdb -U postgres drift
+run_drift() { docker exec -i "$name" psql -U postgres -d drift -v ON_ERROR_STOP=1 -q "$@"; }
+run_drift <"$here/test-fixture.sql"
+# Someone added a role to the validator after this migration was written.
+run_drift -c "create or replace function public.status_actor_valid_v1(p_actor_email text, p_actor_role text, p_actor_discord_user_id text) returns boolean language sql immutable set search_path to '' as \$f\$ select p_actor_role in ('administrator', 'owner', 'moderator') and (p_actor_email is not null or p_actor_discord_user_id is not null); \$f\$;"
+if run_drift <"$here/ai-draft-actor.sql" 2>/tmp/drift.err; then
+  echo "migration unexpectedly overwrote a changed validator" >&2
+  exit 1
+fi
+grep -q "has changed since this migration was written" /tmp/drift.err
+# Nothing was applied: the failed migration rolled back completely.
+run_drift -c "do \$\$ begin if to_regprocedure('public.status_ai_draft_actor_valid_v1(text,text,text)') is not null then raise exception 'partial apply'; end if; end \$\$;"
