@@ -31,9 +31,13 @@ language sql
 immutable
 set search_path = ''
 as $$
-  select p_actor_role = 'ai_agent'
+  -- coalesce: a NULL email or role must give false, not NULL (an `if` on NULL is not taken).
+  select coalesce(
+    p_actor_role = 'ai_agent'
     and p_actor_email = 'ops-agent@ivrm.invalid'  -- reserved TLD: a marker, not a mailbox
-    and p_actor_discord_user_id is null;
+    and p_actor_discord_user_id is null,
+    false
+  );
 $$;
 
 revoke all on function public.status_ai_draft_actor_valid_v1(text, text, text) from public, anon, authenticated;
@@ -44,9 +48,10 @@ declare
   def text;
   guard constant text :=
     'if not public.status_actor_valid_v1(p_actor_email, p_actor_role, p_actor_discord_user_id) then';
+  -- `is not true` so that a NULL result (missing identity data) is refused too.
   replacement constant text :=
-    'if not (public.status_actor_valid_v1(p_actor_email, p_actor_role, p_actor_discord_user_id) '
-    || 'or public.status_ai_draft_actor_valid_v1(p_actor_email, p_actor_role, p_actor_discord_user_id)) then';
+    'if (public.status_actor_valid_v1(p_actor_email, p_actor_role, p_actor_discord_user_id) '
+    || 'or public.status_ai_draft_actor_valid_v1(p_actor_email, p_actor_role, p_actor_discord_user_id)) is not true then';
   matches int;
   occurrences int;
 begin
@@ -76,10 +81,46 @@ begin
 end
 $migration$;
 
+-- Hardening of the existing admin validator (pre-existing weakness, not caused by this change).
+-- With a NULL role and a valid email, `p_actor_role in (...)` is NULL, the whole expression is
+-- NULL, and `if not NULL` is not taken: publish_*, append_*, cancel_* and archive_* then accept
+-- the call. Only service_role can call them, which limits the exposure, but the check should
+-- refuse instead of silently passing. Same body, wrapped in coalesce(..., false).
+create or replace function public.status_actor_valid_v1(
+  p_actor_email text,
+  p_actor_role text,
+  p_actor_discord_user_id text
+) returns boolean
+language sql
+immutable
+set search_path to ''
+as $function$
+  select coalesce(
+    p_actor_role in ('administrator', 'owner')
+    and (
+      p_actor_email is null
+      or (
+        char_length(p_actor_email) between 3 and 320
+        and p_actor_email = lower(btrim(p_actor_email))
+      )
+    )
+    and (
+      p_actor_discord_user_id is null
+      or (
+        char_length(p_actor_discord_user_id) between 17 and 20
+        and p_actor_discord_user_id ~ '^[0-9]+$'
+      )
+    )
+    and (p_actor_email is not null or p_actor_discord_user_id is not null),
+    false
+  );
+$function$;
+
 commit;
 
 -- ---------------------------------------------------------------------------
--- Rollback (restores the original guard and removes the validator):
+-- Rollback (restores the original guard and removes the validator; also restore the original
+-- status_actor_valid_v1 body, without coalesce, if you want the exact previous behavior):
 --
 --   begin;
 --   do $rollback$
