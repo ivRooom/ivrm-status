@@ -68,22 +68,48 @@ class GateConfig:
     operations: dict[str, Operation] = field(default_factory=dict)
 
 
+_SECRET_TEXT = re.compile(rb"^[!-~]{32,}$")
+
+
+def _read_secret(path: Path) -> bytes:
+    """The secret is printable ASCII text (e.g. `openssl rand -hex 32`).
+
+    Only a single trailing newline is removed. Raw random bytes are not accepted: stripping
+    whitespace bytes would silently turn them into a different key than the signer uses.
+    """
+    data = path.read_bytes()
+    for ending in (b"\r\n", b"\n"):
+        if data.endswith(ending):
+            data = data[: -len(ending)]
+            break
+    if not _SECRET_TEXT.fullmatch(data):
+        raise ValueError(
+            "ticket secret must be at least 32 printable ASCII characters without spaces "
+            "(generate one with: openssl rand -hex 32)"
+        )
+    return data
+
+
+def _bounded(name: str, value: Any, low: int, high: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise ValueError(f"{name} must be an integer between {low} and {high}")
+    return value
+
+
 def load_config(path: Path) -> GateConfig:
     raw = json.loads(path.read_text(encoding="utf-8"))
     secret_path = Path(raw["ticket_secret_file"])
     if os.name == "posix" and secret_path.stat().st_mode & 0o077:
         raise ValueError("ticket secret file must not be readable by group or others (chmod 600)")
-    secret = secret_path.read_bytes().strip()
-    if len(secret) < 32:
-        raise ValueError("ticket secret must be at least 32 bytes")
+    secret = _read_secret(secret_path)
 
     approvers = frozenset(str(item) for item in raw["approver_discord_ids"])
-    if not approvers or not all(_DISCORD_ID.match(item) for item in approvers):
+    if not approvers or not all(_DISCORD_ID.fullmatch(item) for item in approvers):
         raise ValueError("approver_discord_ids must be a non-empty list of Discord user ids")
 
     operations: dict[str, Operation] = {}
     for name, spec in raw.get("operations", {}).items():
-        if not _OP_NAME.match(name):
+        if not _OP_NAME.fullmatch(name):
             raise ValueError(f"invalid operation name: {name}")
         argv = spec.get("argv")
         if not argv:
@@ -94,8 +120,8 @@ def load_config(path: Path) -> GateConfig:
         operations[name] = Operation(
             name=name,
             argv=argv,
-            timeout_seconds=int(spec.get("timeout_seconds", 120)),
-            cooldown_seconds=int(spec.get("cooldown_seconds", 0)),
+            timeout_seconds=_bounded(f"{name}.timeout_seconds", spec.get("timeout_seconds", 120), 1, 3600),
+            cooldown_seconds=_bounded(f"{name}.cooldown_seconds", spec.get("cooldown_seconds", 0), 0, 86_400),
             precheck_argv=precheck if precheck else None,
         )
     return GateConfig(
@@ -103,7 +129,7 @@ def load_config(path: Path) -> GateConfig:
         secret=secret,
         state_dir=Path(raw["state_dir"]),
         audit_log=Path(raw["audit_log"]),
-        max_ticket_age_seconds=int(raw.get("max_ticket_age_seconds", 900)),
+        max_ticket_age_seconds=_bounded("max_ticket_age_seconds", raw.get("max_ticket_age_seconds", 900), 1, 3600),
         operations=operations,
     )
 
@@ -125,9 +151,9 @@ def sign_ticket(secret: bytes, payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def _decode_ticket(payload_b64: str, signature_hex: str, secret: bytes) -> dict[str, Any]:
-    if len(payload_b64) > MAX_TICKET_BYTES * 2 or not _B64URL.match(payload_b64):
+    if len(payload_b64) > MAX_TICKET_BYTES * 2 or not _B64URL.fullmatch(payload_b64):
         raise Denied("ticket_malformed")
-    if not _HEX.match(signature_hex):
+    if not _HEX.fullmatch(signature_hex):
         raise Denied("signature_malformed")
     try:
         body = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
@@ -162,7 +188,7 @@ def _validate_payload(payload: dict[str, Any], config: GateConfig, now: float) -
         (payload["approver_discord_id"], _DISCORD_ID),
         (payload["nonce"], _NONCE),
     )
-    if not all(isinstance(value, str) and pattern.match(value) for value, pattern in checks):
+    if not all(isinstance(value, str) and pattern.fullmatch(value) for value, pattern in checks):
         raise Denied("ticket_fields_invalid")
     issued, expires = payload["issued_at"], payload["expires_at"]
     if not all(isinstance(value, int) and not isinstance(value, bool) for value in (issued, expires)):
@@ -218,30 +244,73 @@ def _touch_last(config: GateConfig, operation: Operation, moment: float) -> None
     os.utime(marker, (moment, moment))
 
 
-class _Lock:
-    """One operation at a time. A stale lock (crashed gate) expires on its own."""
+def _lock_nonblocking(handle: Any) -> None:
+    if os.name == "nt":  # development on Windows; production is POSIX
+        import msvcrt
 
-    def __init__(self, config: GateConfig, stale_after: float, now: float) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(handle: Any) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class _Lock:
+    """One operation at a time, enforced by the kernel.
+
+    flock / LockFileEx is released automatically if the gate process dies, so there is
+    no stale-lock guessing. (An earlier version expired the lock file using the timeout
+    of the *requesting* operation, which could let a short operation take the lock away
+    from a long one that was still running.) The file is never unlinked: unlinking is
+    what makes file locks racy.
+    """
+
+    def __init__(self, config: GateConfig) -> None:
         self.path = config.state_dir / "gate.lock"
-        self.stale_after = stale_after
-        self.now = now
+        self.handle: Any = None
 
     def __enter__(self) -> "_Lock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
-            try:
-                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            except FileExistsError:
-                if self.now - self.path.stat().st_mtime > self.stale_after:
-                    self.path.unlink(missing_ok=True)
-                    continue
-                raise Denied("another_operation_running", busy=True) from None
-            os.close(descriptor)
-            return self
-        raise Denied("another_operation_running", busy=True)
+        handle = open(self.path, "a+b")  # noqa: SIM115 - held until __exit__
+        try:
+            _lock_nonblocking(handle)
+        except OSError:
+            handle.close()
+            raise Denied("another_operation_running", busy=True) from None
+        self.handle = handle
+        return self
 
     def __exit__(self, *_exc: object) -> None:
-        self.path.unlink(missing_ok=True)
+        if self.handle is not None:
+            try:
+                _unlock(self.handle)
+            finally:
+                self.handle.close()
+                self.handle = None
+
+
+def _nonce_consumed(config: GateConfig, nonce: str) -> bool:
+    return (config.state_dir / "nonces" / nonce).exists()
+
+
+def _audit_writable(config: GateConfig) -> None:
+    """Fail closed: do not run anything that could not be recorded afterwards."""
+    config.audit_log.parent.mkdir(parents=True, exist_ok=True)
+    with config.audit_log.open("a", encoding="utf-8"):
+        pass
 
 
 # --- running ------------------------------------------------------------------
@@ -287,7 +356,7 @@ def execute(
     dry_run: bool = False,
     now: float | None = None,
 ) -> Result:
-    """Verify the ticket and, unless dry_run, run the operation. Never raises for refusals."""
+    """Verify the ticket and, unless dry_run, run the operation. Never raises."""
     moment = time.time() if now is None else now
     base: dict[str, Any] = {"at": int(moment), "dry_run": dry_run}
     payload: dict[str, Any] = {}
@@ -300,12 +369,18 @@ def execute(
             proposal_hash=payload["proposal_hash"],
             approver_discord_id=payload["approver_discord_id"],
         )
+        _audit_writable(config)
         _check_cooldown(config, operation, moment)
+        if _nonce_consumed(config, payload["nonce"]):
+            raise Denied("ticket_already_used")  # check must agree with what run would do
         if dry_run:
             _audit(config, {**base, "result": "dry_run_ok"})
             return Result(status="executed", reason="dry_run_ok")
 
-        with _Lock(config, stale_after=operation.timeout_seconds + 30, now=moment):
+        with _Lock(config):
+            # Re-check under the lock: two tickets for the same operation can both pass the
+            # early check while the first one runs; the second must still see its cooldown.
+            _check_cooldown(config, operation, moment)
             # Consume the ticket before running: a failed run must not be replayable.
             _claim_nonce(config, payload["nonce"], payload["expires_at"], moment)
             if operation.precheck_argv:
@@ -321,15 +396,21 @@ def execute(
                 completed = _run(operation.argv, operation.timeout_seconds)
             except subprocess.TimeoutExpired:
                 _touch_last(config, operation, moment)
-                _audit(config, {**base, "result": "timeout", "duration": round(time.time() - started, 2)})
-                return Result(status="failed", reason="timeout")
+                return _recorded(
+                    config,
+                    {**base, "result": "timeout", "duration": round(time.time() - started, 2)},
+                    Result(status="failed", reason="timeout"),
+                )
             except OSError as exc:
-                _audit(config, {**base, "result": "spawn_error", "detail": type(exc).__name__})
-                return Result(status="failed", reason="spawn_error")
+                return _recorded(
+                    config,
+                    {**base, "result": "spawn_error", "detail": type(exc).__name__},
+                    Result(status="failed", reason="spawn_error"),
+                )
 
             _touch_last(config, operation, moment)
             ok = completed.returncode == 0
-            _audit(
+            return _recorded(
                 config,
                 {
                     **base,
@@ -338,14 +419,36 @@ def execute(
                     "duration": round(time.time() - started, 2),
                     "stderr_tail": _tail(completed.stderr),
                 },
-            )
-            return Result(
-                status="executed" if ok else "failed",
-                exit_code=completed.returncode,
-                output=_tail(completed.stdout),
+                Result(
+                    status="executed" if ok else "failed",
+                    exit_code=completed.returncode,
+                    output=_tail(completed.stdout),
+                ),
             )
     except Denied as denied:
         # The payload is only echoed after its signature verified, so these fields are ours.
         known = {k: payload[k] for k in ("op", "proposal_id", "approver_discord_id") if k in payload}
-        _audit(config, {**known, **base, "result": "denied", "reason": denied.reason})
-        return Result(status="denied", reason=denied.reason, busy=denied.busy)
+        result = Result(status="denied", reason=denied.reason, busy=denied.busy)
+        return _recorded(config, {**known, **base, "result": "denied", "reason": denied.reason}, result)
+    except Exception as exc:  # noqa: BLE001 - state or audit I/O failed: report, never a traceback
+        try:
+            _audit(config, {**base, "result": "failed", "reason": "internal_error", "detail": type(exc).__name__})
+        except Exception:  # noqa: BLE001 - nothing more can be done; the caller still gets a code
+            pass
+        return Result(status="failed", reason="internal_error")
+
+
+def _recorded(config: GateConfig, record: dict[str, Any], result: Result) -> Result:
+    """Write the audit record; if that fails after the fact, say so instead of hiding the outcome."""
+    try:
+        _audit(config, record)
+    except Exception:  # noqa: BLE001
+        if result.status == "denied":
+            return Result(status="failed", reason="internal_error")
+        return Result(
+            status=result.status,
+            reason="audit_write_failed",
+            exit_code=result.exit_code,
+            output=result.output,
+        )
+    return result

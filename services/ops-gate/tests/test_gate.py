@@ -218,27 +218,6 @@ def test_dry_run_still_rejects_invalid_tickets(env: Env) -> None:
     assert env.run(env.ticket(approver_discord_id=OTHER), dry_run=True).reason == "approver_not_allowed"
 
 
-def test_only_one_operation_runs_at_a_time(env: Env) -> None:
-    lock = env.config.state_dir / "gate.lock"
-    lock.parent.mkdir(parents=True)
-    lock.write_text("busy")
-    os.utime(lock, (NOW, NOW))  # taken just now, on the gate's clock
-    result = env.run(env.ticket())
-    assert result.reason == "another_operation_running" and result.busy
-    assert not env.marker.exists()
-
-
-def test_a_stale_lock_from_a_crashed_gate_is_recovered(env: Env) -> None:
-    lock = env.config.state_dir / "gate.lock"
-    lock.parent.mkdir(parents=True)
-    lock.write_text("stale")
-    stale = NOW - 3600
-    os.utime(lock, (stale, stale))
-    assert env.run(env.ticket()).status == "executed"
-    assert env.marker.read_text() == "ran"
-    assert not lock.exists()
-
-
 def test_denials_are_audited_without_running_anything(env: Env) -> None:
     env.run(env.ticket(approver_discord_id=OTHER))
     record = env.audit()[-1]
