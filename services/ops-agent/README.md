@@ -74,6 +74,9 @@ python -m ops_agent --force     # 正常でも分析（動作確認用）
 
 ## AWS認証
 
+設定の手順（専用ロール、予算アラート、動作確認）は [`aws/README.md`](aws/README.md) を参照してください。ポリシーは `aws/make_policy.py` が、使うプロファイルから自動で作ります。
+
+
 - 本番では、`bedrock:InvokeModel` / `bedrock:Converse` を**使うモデルのARNだけ**に許可した専用IAMロールを使ってください。
 - **rootアカウントの認証情報を使わないでください。**
 - 長期のアクセスキーをサーバーに置かず、可能なら短期認証情報（ロールの引き受け / OIDC）を使います。
