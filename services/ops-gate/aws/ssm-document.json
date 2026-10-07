@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Run an approved ivrm ops-gate ticket. The gate on the host verifies the signed ticket and runs only an allowlisted operation; nothing else can be run through this document.",
+  "parameters": {
+    "verb": {
+      "type": "String",
+      "description": "run executes the operation; check only validates the ticket.",
+      "allowedValues": ["run", "check"]
+    },
+    "ticket": {
+      "type": "String",
+      "description": "base64url ticket payload.",
+      "allowedPattern": "^[A-Za-z0-9_-]{1,4096}$"
+    },
+    "signature": {
+      "type": "String",
+      "description": "HMAC-SHA256 of the ticket, 64 hex characters.",
+      "allowedPattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "runGate",
+      "inputs": {
+        "timeoutSeconds": "600",
+        "runCommand": [
+          "SSH_ORIGINAL_COMMAND='{{ verb }} {{ ticket }} {{ signature }}' /opt/ivrm-ops-gate/run.sh"
+        ]
+      }
+    }
+  ]
+}

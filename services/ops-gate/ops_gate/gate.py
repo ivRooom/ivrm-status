@@ -47,7 +47,7 @@ class Denied(Exception):
         self.busy = busy
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Operation:
     name: str
     argv: list[str]
@@ -58,7 +58,7 @@ class Operation:
     precheck_argv: list[str] | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class GateConfig:
     approver_discord_ids: frozenset[str]
     secret: bytes
@@ -339,7 +339,7 @@ def _audit(config: GateConfig, record: dict[str, Any]) -> None:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Result:
     status: str  # executed | failed | denied
     reason: str = ""

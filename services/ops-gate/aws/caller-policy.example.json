@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SendOnlyTheGateDocument",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:<REGION>:<ACCOUNT_ID>:document/ivrm-ops-gate-run"
+    },
+    {
+      "Sid": "ToTheGateHostsOnly",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:<REGION>:<ACCOUNT_ID>:managed-instance/<HERTA_MANAGED_INSTANCE_ID>"
+      ]
+    },
+    {
+      "Sid": "ReadTheResult",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*"
+    }
+  ]
+}
