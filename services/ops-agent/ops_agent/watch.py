@@ -84,6 +84,10 @@ class Concern:
     # Something is unhealthy but covered by an in-progress maintenance: nothing to report, and
     # not a recovery either.
     suppressed: bool = False
+    # Which services are covered (and still unhealthy), and the id behind each reported name, so
+    # a later cycle can tell "this service recovered" from "this service went into maintenance".
+    suppressed_ids: frozenset = frozenset()
+    names_by_id: Any = None
 
 
 def concerns(status: Any) -> Concern:
@@ -106,20 +110,28 @@ def concerns(status: Any) -> Concern:
                 covered.update(str(i) for i in ids)
     names: list[str] = []
     parts: list[str] = []
-    suppressed = False
+    names_by_id: dict[str, str] = {}
+    suppressed_ids: set[str] = set()
     for service in services:
         if not isinstance(service, dict) or service.get("status") in HEALTHY:
             continue
         if service.get("id") in covered:
-            suppressed = True
+            suppressed_ids.add(str(service.get("id")))
             continue
-        names.append(str(service.get("name") or service.get("id") or "不明")[:60])
+        name = str(service.get("name") or service.get("id") or "不明")[:60]
+        names.append(name)
         parts.append(str(service.get("id")))
+        names_by_id[str(service.get("id"))] = name
     for incident in status.get("incidents") or []:
         if isinstance(incident, dict) and str(incident.get("status", "")).lower() != "resolved":
-            names.append("Incident: " + str(incident.get("title") or incident.get("public_id") or "不明")[:50])
-            parts.append(f"incident:{incident.get('public_id')}")
-    return Concern(sorted(names), "|".join(sorted(parts)), suppressed)
+            name = "Incident: " + str(incident.get("title") or incident.get("public_id") or "不明")[:50]
+            incident_id = f"incident:{incident.get('public_id')}"
+            names.append(name)
+            parts.append(incident_id)
+            names_by_id[incident_id] = name
+    return Concern(
+        sorted(names), "|".join(sorted(parts)), bool(suppressed_ids), frozenset(suppressed_ids), names_by_id
+    )
 
 
 @dataclass(frozen=True)
@@ -163,36 +175,64 @@ def watch_once(
     if float(state.get("silence_until") or 0) > now:
         return WatchResult("silenced")
 
+    # A message that could not be delivered earlier goes out FIRST, whatever the health is now:
+    # it was already paid for, and if the service has since recovered, dropping it would leave the
+    # approver never knowing about an outage that was analyzed. The cycle then carries on and may
+    # follow it with the recovery notice.
+    if state.get("pending"):
+        try:
+            _deliver(notifier, store, state, str(state["pending"]))
+        except NotifyError as exc:
+            store.save(state)
+            return WatchResult("notify_failed", str(exc))
+        state.pop("pending", None)
+        state["notified_at"] = now
+        store.save(state)
+        resent = True
+    else:
+        resent = False
+
     current = concerns(snapshot.get("status", {}))
     keep = {k: state[k] for k in ("dm_channel_id", "silence_until") if k in state}
-
-    if not current.services and current.suppressed:
-        # Unhealthy, but a maintenance covers it. Do not report, and do not claim a recovery:
-        # forget the episode quietly. If the problem outlives the maintenance it starts again.
-        store.save(keep)
-        return WatchResult("suppressed_by_maintenance")
 
     if not current.services:
         if not state.get("fingerprint"):
             return WatchResult("healthy")
+        episode_ids = [part for part in str(state["fingerprint"]).split("|") if part]
+        moved_to_maintenance = [i for i in episode_ids if i in current.suppressed_ids]
+        recovered_ids = [i for i in episode_ids if i not in current.suppressed_ids]
         notified = bool(state.get("notified_at"))
-        services = state.get("services") or []
+        stored_names = state.get("names_by_id") or {}
+        names = [stored_names.get(i, i) for i in recovered_ids] or list(state.get("services") or [])
+
+        if moved_to_maintenance and not recovered_ids:
+            # Everything in the episode is now covered by a maintenance: not a recovery. Forget
+            # the episode quietly; if the problem outlives the maintenance it is counted again.
+            store.save(keep)
+            return WatchResult("suppressed_by_maintenance", ", ".join(moved_to_maintenance))
+
         if notified:
             try:
-                _deliver(notifier, store, keep, format_recovered(services, status_url))
+                _deliver(notifier, store, keep, format_recovered(names, status_url))
             except NotifyError as exc:  # best effort: a recovery notice is not worth a retry loop
                 logger.warning("ops_agent_recovery_notice_failed %s", exc)
         store.save(keep)
-        return WatchResult("recovered" if notified else "blip_ended", ", ".join(services))
+        return WatchResult("recovered" if notified else "blip_ended", ", ".join(names))
 
     if current.fingerprint != state.get("fingerprint"):
-        state = {**keep, "fingerprint": current.fingerprint, "first_seen": now, "services": current.services}
+        state = {
+            **keep,
+            "fingerprint": current.fingerprint,
+            "first_seen": now,
+            "services": current.services,
+            "names_by_id": current.names_by_id or {},
+        }
         store.save(state)
 
     first_seen = float(state["first_seen"])
 
-    if state.get("pending"):  # an earlier delivery failed: resend without calling the model again
-        return _send(notifier, store, state, str(state["pending"]), now, "resent")
+    if resent:
+        return WatchResult("resent")
 
     if now - first_seen < min_duration_seconds:
         return WatchResult("waiting", f"{int(now - first_seen)}s of {min_duration_seconds}s")

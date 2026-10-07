@@ -27,7 +27,7 @@
 5. 回復したら、「回復」を1回通知して、状態を消します。
 6. 手動の一時停止（`--silence 分`）の間は、すべて止まります。
 7. LLMが使えない、または月額の予算に達したときは、**AIなしの短い通知**を送ります（公開はしません）。
-8. 通知に失敗したときは、次の実行で**分析のやり直しなしに**再送します。
+8. 通知に失敗したときは、次の実行で（そのとき、サービスが回復していても）**分析のやり直しなしに**再送します。
 
 通知は、承認者へのDiscordのダイレクトメッセージです。**メンションは無効**にしてあり、AIが作った文章で、誰かに通知が飛ぶことはありません。設定がないときは、通知の内容をジャーナルに出します。
 
@@ -73,14 +73,15 @@
    ```
 
 5. ユーザーを作る: `sudo useradd -r -s /sbin/nologin ivrm-ops-agent`
-6. まず**手で1回**実行して、動作を確認する。
+6. まず**サービスを1回**実行して、動作を確認する。本番と同じユニット（サンドボックスと環境ファイルを含む）で実行されるので、設定ファイルのコメント行などで困りません。
 
    ```bash
-   sudo -u ivrm-ops-agent env $(sudo cat /etc/ivrm-ops-agent/env | xargs) \
-     AWS_CONFIG_FILE=/etc/ivrm-ops-agent/aws-config AWS_PROFILE=ops-agent \
-     OPS_AGENT_STATE_PATH=/tmp/ops-state.json PYTHONPATH=/opt/ivrm-ops-agent \
-     python3.11 -m ops_agent --watch
+   sudo systemctl daemon-reload
+   sudo systemctl start ivrm-ops-agent.service
+   sudo journalctl -u ivrm-ops-agent.service -n 30 --no-pager
    ```
+
+   正常なときは、ジャーナルの最後に `{"action": "healthy", ...}` が出ます。`notify_misconfigured` や `status_unavailable` が出たら、設定を確認してください。
 
 7. 有効化する: `sudo systemctl daemon-reload && sudo systemctl enable --now ivrm-ops-agent.timer`
 8. 一時停止（作業中など。1〜1440分）。**本番の状態ファイルを指定して、サービスと同じユーザーで**実行します（指定しないと、成功と表示されても、タイマーには効きません）。
