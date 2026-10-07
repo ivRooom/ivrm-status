@@ -61,16 +61,7 @@
    - 権限: `aws/make_policy.py` の出力（Bedrockの `InvokeModel`、プロファイル経由のみ）。
    - 信頼ポリシー: `aws/role-trust-policy.example.json`（ホストのインスタンスロールだけが引き受けられる）。
 2. ホストのインスタンスロールに、`aws/host-assume-role-policy.example.json` を足す（`ivrm-ops-agent` だけを引き受けられる）。
-3. ホストにPython 3.11を入れ、**専用の仮想環境**に依存を入れる（Amazon Linux 2023）。標準のPythonは3.9ですが、boto3の対応のため3.11を使います。
-
-   ```bash
-   sudo dnf install -y python3.11
-   sudo python3.11 -m venv /opt/ivrm-ops-agent/venv
-   sudo /opt/ivrm-ops-agent/venv/bin/pip install -r /opt/ivrm-ops-agent/requirements.txt
-   ```
-
-   サービスは、専用のユーザーで、`-s`（ユーザー領域を使わない）つきで動きます。そのため、`pip install boto3` を一般のユーザーで実行しても、サービスからは**読み込めません**（正常なときは、boto3を読み込まないので、最初の実行では気づけず、最初の障害の分析で、初めて失敗します）。必ず、この仮想環境に入れてください。
-4. 配置:
+3. 配置（**先に**、コードと設定のファイルを置きます。次の手順の `pip install` が、`requirements.txt` を使います）:
 
    ```text
    /opt/ivrm-ops-agent/ops_agent/            このリポジトリの services/ops-agent/ops_agent/
@@ -80,6 +71,16 @@
    /etc/systemd/system/ivrm-ops-agent.service
    /etc/systemd/system/ivrm-ops-agent.timer
    ```
+
+4. Python 3.11を入れ、**専用の仮想環境**に依存を入れる（Amazon Linux 2023）。標準のPythonは3.9ですが、boto3の対応のため3.11を使います。
+
+   ```bash
+   sudo dnf install -y python3.11
+   sudo python3.11 -m venv /opt/ivrm-ops-agent/venv
+   sudo /opt/ivrm-ops-agent/venv/bin/pip install -r /opt/ivrm-ops-agent/requirements.txt
+   ```
+
+   サービスは、専用のユーザーで、`-s`（ユーザー領域を使わない）つきで動きます。そのため、`pip install boto3` を一般のユーザーで実行しても、サービスからは**読み込めません**（正常なときは、boto3を読み込まないので、最初の実行では気づけず、最初の障害の分析で、初めて失敗します）。必ず、この仮想環境に入れてください。
 
 5. ユーザーを作る: `sudo useradd -r -s /sbin/nologin ivrm-ops-agent`
 6. まず**サービスを1回**実行して、動作を確認する。本番と同じユニット（サンドボックスと環境ファイルを含む）で実行されるので、設定ファイルのコメント行などで困りません。

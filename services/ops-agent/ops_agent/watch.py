@@ -148,9 +148,15 @@ def concerns(status: Any) -> Concern:
         names_by_id[str(service.get("id"))] = name
     for incident in status.get("incidents") or []:
         if isinstance(incident, dict) and str(incident.get("status", "")).lower() != "resolved":
+            incident_id = f"incident:{incident.get('public_id')}"
+            affected = incident.get("affected_service_ids")
+            if isinstance(affected, list) and affected and all(str(i) in covered for i in affected):
+                # Everything this incident touches is under a planned maintenance: same rule as for
+                # the services themselves, so it neither starts a debounce nor counts as recovered.
+                suppressed_ids.add(incident_id)
+                continue
             # The title is public, attacker-influenced text: one clean line, never raw.
             name = "Incident: " + single_line(incident.get("title") or incident.get("public_id") or "不明", 50)
-            incident_id = f"incident:{incident.get('public_id')}"
             names.append(name)
             parts.append(incident_id)
             names_by_id[incident_id] = name
