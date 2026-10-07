@@ -297,13 +297,26 @@ def watch_once(
                 pass
             except NotifyError as exc:  # best effort, like every recovery notice
                 logger.warning("ops_agent_recovery_notice_failed %s", exc)
-        state = {
-            **keep,
-            "fingerprint": current.fingerprint,
-            "first_seen": now,
-            "services": current.services,
-            "names_by_id": current.names_by_id or {},
-        }
+        if now_ids and now_ids < set(previous):
+            # The episode only SHRANK: what is left has been failing since before, so the debounce
+            # and the notification carry on. Restarting them would bill a second analysis and send
+            # a duplicate alert for a service that never recovered.
+            state = {
+                **keep,
+                "fingerprint": current.fingerprint,
+                "first_seen": state["first_seen"],
+                "services": current.services,
+                "names_by_id": current.names_by_id or {},
+                **({"notified_at": state["notified_at"]} if state.get("notified_at") else {}),
+            }
+        else:
+            state = {
+                **keep,
+                "fingerprint": current.fingerprint,
+                "first_seen": now,
+                "services": current.services,
+                "names_by_id": current.names_by_id or {},
+            }
         store.save(state)
 
     first_seen = float(state["first_seen"])

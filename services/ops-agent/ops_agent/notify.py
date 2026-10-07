@@ -26,6 +26,10 @@ API_BASE = "https://discord.com/api/v10"
 class NotifyError(RuntimeError):
     """Delivery failed. The message never contains the token or the request body."""
 
+    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True)
 class NotifySettings:
@@ -134,9 +138,12 @@ class DiscordDM:
             raise ValueError("discord api base must be https")
         self.settings = settings
         self._open = opener or _default_open
-        # Identifies the recipient without storing the id itself. The DM channel is cached with this
-        # key, so changing the approver can never keep delivering to the previous one.
-        self.recipient_key = hashlib.sha256(settings.user_id.encode("utf-8")).hexdigest()[:16]
+        # Identifies who receives it AND which bot sends it, without storing either secret or id. A
+        # Discord bot token starts with the bot's own (non-secret) id, so that part is used, never
+        # the token. The DM channel is cached with this key: changing the approver or the bot must
+        # not keep using a channel that belongs to the previous pair.
+        bot_id = settings.bot_token.split(".")[0] if "." in settings.bot_token else ""
+        self.recipient_key = hashlib.sha256(f"{settings.user_id}:{bot_id}".encode("utf-8")).hexdigest()[:16]
 
     def _call(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -153,7 +160,7 @@ class DiscordDM:
             with self._open(request, self.settings.timeout_seconds) as response:
                 raw = response.read(200_000)
         except urllib.error.HTTPError as exc:  # status only: the body may echo the request
-            raise NotifyError(f"discord returned HTTP {exc.code} for {method} {path.split('/')[1]}") from None
+            raise NotifyError(f"discord returned HTTP {exc.code} for {method} {path.split('/')[1]}", exc.code) from None
         except (OSError, ValueError) as exc:
             raise NotifyError(f"discord request failed: {type(exc).__name__}") from None
         try:
@@ -168,11 +175,18 @@ class DiscordDM:
         return channel
 
     def send(self, message: str, channel_id: Optional[str] = None) -> str:
-        """Send the message and return the DM channel id (cache it to skip the lookup next time)."""
+        """Send the message and return the DM channel id (cache it to skip the lookup next time).
+
+        A cached channel that Discord now refuses (403 or 404: another bot, a changed recipient, a
+        closed DM) is reopened once instead of failing the same way on every retry.
+        """
+        body = {"content": _truncate(message), "allowed_mentions": {"parse": []}}
         channel = channel_id or self.open_channel()
-        self._call(
-            "POST",
-            f"/channels/{channel}/messages",
-            {"content": _truncate(message), "allowed_mentions": {"parse": []}},
-        )
+        try:
+            self._call("POST", f"/channels/{channel}/messages", body)
+        except NotifyError as exc:
+            if not channel_id or exc.status_code not in (403, 404):
+                raise
+            channel = self.open_channel()
+            self._call("POST", f"/channels/{channel}/messages", body)
         return channel
