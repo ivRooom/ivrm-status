@@ -20,7 +20,7 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Reservation:
     id: str
     cost_jpy: float

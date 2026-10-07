@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the ivRooom ops-agent watch cycle every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+# Spread the load; the status page and Discord are not hammered at :00.
+RandomizedDelaySec=20
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

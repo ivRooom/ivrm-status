@@ -15,7 +15,7 @@ def _int(name: str, default: int) -> int:
     return default if raw is None else int(raw)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Settings:
     status_api_base: str = "https://status.ivrm.jp"
     bedrock_region: str = "ap-northeast-1"
@@ -31,6 +31,10 @@ class Settings:
     price_input_usd_per_mtok: float = 1.0
     price_output_usd_per_mtok: float = 5.0
     ledger_path: Path = Path("ops-agent-ledger.jsonl")
+    state_path: Path = Path("ops-agent-state.json")
+    watch_min_duration_seconds: int = 300
+    watch_repeat_after_seconds: int = 3600
+    status_page_url: str = "https://status.ivrm.jp/"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,4 +51,7 @@ class Settings:
             price_input_usd_per_mtok=_float("OPS_AGENT_PRICE_INPUT_USD_PER_MTOK", defaults.price_input_usd_per_mtok),
             price_output_usd_per_mtok=_float("OPS_AGENT_PRICE_OUTPUT_USD_PER_MTOK", defaults.price_output_usd_per_mtok),
             ledger_path=Path(os.getenv("OPS_AGENT_LEDGER_PATH", str(defaults.ledger_path))),
+            state_path=Path(os.getenv("OPS_AGENT_STATE_PATH", str(defaults.state_path))),
+            watch_min_duration_seconds=_int("OPS_AGENT_WATCH_MIN_DURATION_SECONDS", defaults.watch_min_duration_seconds),
+            watch_repeat_after_seconds=_int("OPS_AGENT_WATCH_REPEAT_AFTER_SECONDS", defaults.watch_repeat_after_seconds),
         )

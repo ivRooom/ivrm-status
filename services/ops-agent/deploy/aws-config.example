@@ -1,0 +1,6 @@
+# /etc/ivrm-ops-agent/aws-config
+# Assume the dedicated role using the instance profile of the host; no access keys are stored.
+[profile ops-agent]
+role_arn = arn:aws:iam::<ACCOUNT_ID>:role/ivrm-ops-agent
+credential_source = Ec2InstanceMetadata
+region = ap-northeast-1

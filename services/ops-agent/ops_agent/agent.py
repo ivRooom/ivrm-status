@@ -49,7 +49,7 @@ class AnalysisFailed(RuntimeError):
     pass
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Outcome:
     skipped: bool
     reason: str

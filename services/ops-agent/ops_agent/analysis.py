@@ -8,7 +8,7 @@ SEVERITIES = ("none", "info", "warning", "critical")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Analysis:
     severity: str
     summary: str
