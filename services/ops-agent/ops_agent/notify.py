@@ -7,6 +7,7 @@ untrusted, so mentions are disabled and control characters are removed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -58,6 +59,17 @@ def clean(text: object, limit: int) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
+_WHITESPACE = re.compile(r"\s+")
+
+
+def single_line(text: object, limit: int) -> str:
+    """Untrusted text as one plain line: control characters removed, every run of whitespace
+    (newlines included) collapsed to a space. A title with a newline in it cannot start a fake
+    heading or a fake line in a notification or in the journal."""
+    value = _WHITESPACE.sub(" ", _CONTROL.sub("", str(text if text is not None else ""))).strip()
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
 def _truncate(message: str) -> str:
     return message if len(message) <= MAX_MESSAGE_CHARS else message[: MAX_MESSAGE_CHARS - 1] + "…"
 
@@ -70,14 +82,14 @@ def format_analysis(analysis: dict[str, Any], services: list[str], since: str, s
         f"**[ivRooom Status] {SEVERITY_LABEL.get(analysis.get('severity'), '不明')}**: {', '.join(services)}",
         f"継続: {since} から",
         "",
-        clean(analysis.get("summary"), 400),
+        single_line(analysis.get("summary"), 400),
     ]
     causes = analysis.get("suspected_causes") or []
     steps = analysis.get("next_steps") or []
     if causes:
-        lines += ["", "**考えられる原因（推測）**"] + [f"- {clean(item, 200)}" for item in causes[:5]]
+        lines += ["", "**考えられる原因（推測）**"] + [f"- {single_line(item, 200)}" for item in causes[:5]]
     if steps:
-        lines += ["", "**次の確認**"] + [f"- {clean(item, 200)}" for item in steps[:5]]
+        lines += ["", "**次の確認**"] + [f"- {single_line(item, 200)}" for item in steps[:5]]
     if analysis.get("announcement_recommended"):
         lines += ["", "お知らせの公開を検討してください（公開は管理画面で行います。自動では公開されません）。"]
     lines += ["", f"<{status_url}>", "*AIによる分析です。事実は、ステータスページで確認してください。*"]
@@ -90,7 +102,7 @@ def format_fallback(services: list[str], since: str, reason: str, status_url: st
             [
                 f"**[ivRooom Status] 異常を検知**: {', '.join(services)}",
                 f"継続: {since} から",
-                f"（AIによる分析は行っていません: {clean(reason, 120)}）",
+                f"（AIによる分析は行っていません: {single_line(reason, 120)}）",
                 "",
                 f"<{status_url}>",
             ]
@@ -122,6 +134,9 @@ class DiscordDM:
             raise ValueError("discord api base must be https")
         self.settings = settings
         self._open = opener or _default_open
+        # Identifies the recipient without storing the id itself. The DM channel is cached with this
+        # key, so changing the approver can never keep delivering to the previous one.
+        self.recipient_key = hashlib.sha256(settings.user_id.encode("utf-8")).hexdigest()[:16]
 
     def _call(self, method: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(

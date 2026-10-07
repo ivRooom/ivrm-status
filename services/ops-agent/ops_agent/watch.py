@@ -32,6 +32,7 @@ from .notify import (
     format_fallback,
     format_recovered,
     format_reminder,
+    single_line,
 )
 
 logger = logging.getLogger("ops_agent")
@@ -141,13 +142,14 @@ def concerns(status: Any) -> Concern:
             # as suppressed rather than skipped like a healthy service.
             suppressed_ids.add(str(service.get("id")))
             continue
-        name = str(service.get("name") or service.get("id") or "不明")[:60]
+        name = single_line(service.get("name") or service.get("id") or "不明", 60)
         names.append(name)
         parts.append(str(service.get("id")))
         names_by_id[str(service.get("id"))] = name
     for incident in status.get("incidents") or []:
         if isinstance(incident, dict) and str(incident.get("status", "")).lower() != "resolved":
-            name = "Incident: " + str(incident.get("title") or incident.get("public_id") or "不明")[:50]
+            # The title is public, attacker-influenced text: one clean line, never raw.
+            name = "Incident: " + single_line(incident.get("title") or incident.get("public_id") or "不明", 50)
             incident_id = f"incident:{incident.get('public_id')}"
             names.append(name)
             parts.append(incident_id)
@@ -187,9 +189,14 @@ def _deliver(notifier: Notifier, store: StateStore, state: dict[str, Any], messa
     """
     if store.load_silence() > now:
         raise Silenced()
-    channel = notifier.send(message, state.get("dm_channel_id") or None)
-    if channel and channel != state.get("dm_channel_id"):
+    # The cached DM channel belongs to one recipient. If the configured approver changed, the old
+    # channel must not be used: it would keep delivering to the previous person.
+    recipient = getattr(notifier, "recipient_key", "")
+    cached = state.get("dm_channel_id") if state.get("dm_recipient", "") == recipient else None
+    channel = notifier.send(message, cached or None)
+    if channel:
         state["dm_channel_id"] = channel
+        state["dm_recipient"] = recipient
 
 
 def flush_pending(notifier: Notifier, store: StateStore, now: float) -> Optional[WatchResult]:
@@ -241,7 +248,7 @@ def watch_once(
     state = store.load()
 
     current = concerns(snapshot.get("status", {}))
-    keep = {k: state[k] for k in ("dm_channel_id",) if k in state}
+    keep = {k: state[k] for k in ("dm_channel_id", "dm_recipient") if k in state}
 
     if not current.services:
         if not state.get("fingerprint"):
