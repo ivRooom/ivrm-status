@@ -1,0 +1,40 @@
+[Unit]
+Description=ivRooom ops-agent watch cycle (read-only analysis, notifies the approver)
+Documentation=https://github.com/ivRooom/ivrm-status/tree/main/services/ops-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ivrm-ops-agent
+Group=ivrm-ops-agent
+WorkingDirectory=/opt/ivrm-ops-agent
+# Secrets (Discord bot token and approver id) live here, readable by root only; systemd reads it.
+EnvironmentFile=/etc/ivrm-ops-agent/env
+# A dedicated role is assumed through the instance profile (see aws-role.md). No access keys.
+Environment=AWS_CONFIG_FILE=/etc/ivrm-ops-agent/aws-config
+Environment=AWS_PROFILE=ops-agent
+Environment=PYTHONPATH=/opt/ivrm-ops-agent
+Environment=OPS_AGENT_STATE_PATH=/var/lib/ivrm-ops-agent/state.json
+Environment=OPS_AGENT_LEDGER_PATH=/var/lib/ivrm-ops-agent/ledger.jsonl
+ExecStart=/usr/bin/python3.11 -s -m ops_agent --watch
+TimeoutStartSec=120
+
+# Least privilege: this process only reads the public status, calls Bedrock and sends a DM.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/ivrm-ops-agent
+StateDirectory=ivrm-ops-agent
+StateDirectoryMode=0700

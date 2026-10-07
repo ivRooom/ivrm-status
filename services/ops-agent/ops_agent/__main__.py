@@ -4,11 +4,14 @@ import argparse
 import json
 import logging
 import sys
+import time
 
 from .agent import AnalysisFailed, analyze, build_request, needs_analysis
 from .budget import BudgetExceeded, BudgetLedger
 from .config import Settings
+from .notify import DiscordDM, NotifyError, NotifySettings
 from .status_client import StatusClient, StatusFetchError
+from .watch import StateStore, StdoutNotifier, silence, watch_once
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -22,12 +25,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ops_agent", description="Read-only status analysis (Phase 0)")
     parser.add_argument("--force", action="store_true", help="analyze even if every service is operational")
     parser.add_argument("--dry-run", action="store_true", help="print the request instead of calling Bedrock")
+    parser.add_argument("--watch", action="store_true", help="one watch cycle for a timer: decide, analyze once, notify")
+    parser.add_argument("--silence", type=int, metavar="MINUTES", help="suppress watch notifications for this long (1-1440)")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy codepage
 
     settings = Settings.from_env()
+    if args.silence is not None:
+        try:
+            until = silence(StateStore(settings.state_path), args.silence, time.time())
+        except ValueError as exc:
+            return _fail("usage", str(exc), 64)
+        print(json.dumps({"silenced_until_epoch": int(until)}))
+        return 0
+    if args.watch:
+        return _watch(settings)
     try:
         snapshot = StatusClient(settings.status_api_base, settings.request_timeout_seconds).snapshot()
     except (StatusFetchError, ValueError) as exc:
@@ -75,6 +89,42 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     return 0
+
+
+def _watch(settings: Settings) -> int:
+    try:
+        notify_settings = NotifySettings.from_env()
+        notifier = DiscordDM(notify_settings) if notify_settings.configured else StdoutNotifier()
+    except ValueError as exc:
+        return _fail("notify_misconfigured", str(exc), 78)
+    try:
+        snapshot = StatusClient(settings.status_api_base, settings.request_timeout_seconds).snapshot()
+    except (StatusFetchError, ValueError) as exc:
+        return _fail("status_unavailable", str(exc), 3)
+
+    def analyze_fn(snap):
+        import boto3  # only when something needs analyzing: a healthy cycle needs no AWS at all
+        from botocore.config import Config
+
+        bedrock = boto3.client(
+            "bedrock-runtime",
+            region_name=settings.bedrock_region,
+            config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 0, "mode": "standard"}),
+        )
+        return analyze(settings, bedrock, snap, BudgetLedger(settings), force=True)
+
+    result = watch_once(
+        snapshot=snapshot,
+        analyze_fn=analyze_fn,
+        notifier=notifier,
+        store=StateStore(settings.state_path),
+        now=time.time(),
+        status_url=settings.status_page_url,
+        min_duration_seconds=settings.watch_min_duration_seconds,
+        repeat_after_seconds=settings.watch_repeat_after_seconds,
+    )
+    print(json.dumps({"action": result.action, "detail": result.detail}, ensure_ascii=False), file=sys.stderr)
+    return 4 if result.action == "notify_failed" else 0
 
 
 if __name__ == "__main__":
