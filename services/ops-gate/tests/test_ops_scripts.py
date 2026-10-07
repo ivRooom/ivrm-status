@@ -13,27 +13,12 @@ from pathlib import Path
 
 import pytest
 
+from shims import install
+
 OPS = Path(__file__).resolve().parents[1] / "ops"
 SH = shutil.which("sh")
 needs_sh = pytest.mark.skipif(SH is None or os.name == "nt", reason="needs a POSIX sh")
 
-DOCKER_SHIM = r"""#!/bin/sh
-echo "docker $*" >> "$SHIM_LOG"
-case "$1" in
-  inspect) cat "$SHIM_DIR/inspect_$2" 2>/dev/null || exit 1 ;;
-  compose)
-    case "$*" in
-      *" ps "*) cat "$SHIM_DIR/compose_ps" 2>/dev/null ;;
-      *) [ -f "$SHIM_DIR/compose_fail" ] && exit 3 ;;
-    esac ;;
-esac
-exit 0
-"""
-CURL_SHIM = r"""#!/bin/sh
-echo "curl $*" >> "$SHIM_LOG"
-[ -f "$SHIM_DIR/curl_ok" ]
-"""
-SLEEP_SHIM = "#!/bin/sh\nexit 0\n"  # never really wait
 
 
 class Shim:
@@ -42,10 +27,7 @@ class Shim:
         self.dir.mkdir()
         self.log = tmp / "calls.log"
         self.log.write_text("")
-        for name, body in (("docker", DOCKER_SHIM), ("curl", CURL_SHIM), ("sleep", SLEEP_SHIM)):
-            path = self.dir / name
-            path.write_text(body)
-            path.chmod(0o755)
+        install(self.dir)
         self.tmp = tmp
 
     def set(self, name: str, content: str = "") -> None:
@@ -100,7 +82,7 @@ def test_start_mc_resource_fails_when_the_container_never_becomes_ready(shim: Sh
 @needs_sh
 def test_a_missing_compose_file_fails_before_touching_docker(shim: Shim, tmp_path: Path) -> None:
     result = shim.run("start-mc-resource.sh", IVRM_MC_RESOURCE_DIR=str(tmp_path / "nope"))
-    assert result.returncode != 0 and "not found" in result.stderr
+    assert result.returncode != 0 and "no compose file" in result.stderr
     assert shim.calls() == []
 
 
@@ -111,7 +93,7 @@ def test_restart_mc_main_restarts_exactly_once_then_only_reads(shim: Shim, tmp_p
     result = shim.run("restart-mc-main.sh", IVRM_MC_MAIN_DIR=str(directory))
     assert result.returncode == 0, result.stderr
     restarts = [call for call in shim.calls() if " restart" in call]
-    assert restarts == [f"docker compose --project-directory {directory} restart"]
+    assert restarts == [f"docker compose --project-directory {directory} -f {directory}/compose.yml restart"]
 
 
 @needs_sh
@@ -180,52 +162,11 @@ def test_scripts_are_valid_posix_sh() -> None:
         assert subprocess.run([SH, "-n", str(script)], capture_output=True).returncode == 0, script.name
 
 
-# --- precheck_no_players.py -----------------------------------------------------------
-
-
-class Status(BaseHTTPRequestHandler):
-    body = b"{}"
-
-    def do_GET(self) -> None:  # noqa: N802
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(type(self).body)
-
-    def log_message(self, *_args) -> None:  # noqa: D401
-        pass
-
-
-@pytest.fixture()
-def status_server():
-    server = HTTPServer(("127.0.0.1", 0), Status)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield lambda body: (setattr(Status, "body", json.dumps(body).encode()), f"http://127.0.0.1:{server.server_port}/")[1]
-    server.shutdown()
+# --- precheck_no_players.py (the live-count rules are in test_ops_review.py) ---------------
 
 
 def precheck(url: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(OPS / "precheck_no_players.py"), url], capture_output=True, text=True, timeout=30)
-
-
-def status(players, kind="minecraft"):
-    return {"services": [{"id": "x", "meta": {"type": kind, "playersOnline": players}}]}
-
-
-def test_precheck_allows_a_restart_with_nobody_online(status_server) -> None:
-    assert precheck(status_server(status(0))).returncode == 0
-
-
-@pytest.mark.parametrize("players", [1, 7])
-def test_precheck_refuses_when_players_are_online(status_server, players: int) -> None:
-    result = precheck(status_server(status(players)))
-    assert result.returncode == 1 and "player" in result.stderr
-
-
-@pytest.mark.parametrize("body", [{}, {"services": []}, status(None), status("0"), status(-1), status(True), status(0, kind="other"), []])
-def test_precheck_fails_closed_when_the_count_is_unknown(status_server, body) -> None:
-    assert precheck(status_server(body)).returncode == 1
 
 
 def test_precheck_fails_closed_when_the_status_is_unreachable() -> None:

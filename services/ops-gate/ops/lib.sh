@@ -6,21 +6,36 @@ log() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 # wait_until <timeout_seconds> <interval_seconds> <description> <command...>
-# Runs the command until it succeeds or the timeout passes. Fails with a message otherwise.
+# Runs the command until it succeeds or the timeout passes. The timeout is wall-clock time, so a
+# slow probe (a curl that takes seconds) counts against it instead of stretching the wait.
 wait_until() {
   _timeout=$1; _interval=$2; _what=$3; shift 3
-  _waited=0
+  _start=$(date +%s)
   while :; do
     if "$@" >/dev/null 2>&1; then
-      log "ok: $_what (after ${_waited}s)"
+      log "ok: $_what (after $(( $(date +%s) - _start ))s)"
       return 0
     fi
-    if [ "$_waited" -ge "$_timeout" ]; then
+    _elapsed=$(( $(date +%s) - _start ))
+    if [ "$_elapsed" -ge "$_timeout" ]; then
       fail "$_what did not become ready within ${_timeout}s"
     fi
     sleep "$_interval"
-    _waited=$((_waited + _interval))
   done
+}
+
+# compose_file <dir>: print the compose file in the directory. `docker compose` only looks in the
+# current directory (and its parents), and --project-directory does not choose the file, so the
+# gate, which does not run from the application directory, must always pass -f.
+compose_file() {
+  for _name in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do
+    if [ -f "$1/$_name" ]; then
+      printf '%s
+' "$1/$_name"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # container_ready <name>: running, and healthy when the image defines a healthcheck.
