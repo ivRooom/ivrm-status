@@ -52,8 +52,23 @@ class StdoutNotifier:
 
 
 class StateStore:
+    """The episode state has ONE writer: the timer's watch cycle (a oneshot unit never overlaps
+    itself). The silence lives in a separate file written only by the --silence command and only
+    read by the watch cycle, so the two never overwrite each other and no lock is needed."""
+
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.silence_path = path.with_name(path.name + ".silence")
+
+    def load_silence(self) -> float:
+        try:
+            data = json.loads(self.silence_path.read_text(encoding="utf-8"))
+            return float(data.get("until") or 0)
+        except (OSError, ValueError, AttributeError):
+            return 0.0
+
+    def save_silence(self, until: float) -> None:
+        self._write(self.silence_path, {"until": until})
 
     def load(self) -> dict[str, Any]:
         try:
@@ -63,12 +78,16 @@ class StateStore:
         return data if isinstance(data, dict) else {}
 
     def save(self, state: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".state-")
+        self._write(self.path, state)
+
+    @staticmethod
+    def _write(target: Path, data: dict[str, Any]) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=".state-")
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                json.dump(state, handle, ensure_ascii=False)
-            os.replace(tmp, self.path)  # atomic: a crash never leaves a half-written file
+                json.dump(data, handle, ensure_ascii=False)
+            os.replace(tmp, target)  # atomic: a crash never leaves a half-written file
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -147,10 +166,9 @@ def _since(epoch: float) -> str:
 def silence(store: StateStore, minutes: int, now: float) -> float:
     if not 1 <= minutes <= 24 * 60:
         raise ValueError("silence must be between 1 minute and 24 hours")
-    state = store.load()
-    state["silence_until"] = now + minutes * 60
-    store.save(state)
-    return state["silence_until"]
+    until = now + minutes * 60
+    store.save_silence(until)  # its own file: never read-modify-write the watch state
+    return until
 
 
 def _deliver(notifier: Notifier, store: StateStore, state: dict[str, Any], message: str) -> None:
@@ -158,6 +176,28 @@ def _deliver(notifier: Notifier, store: StateStore, state: dict[str, Any], messa
     channel = notifier.send(message, state.get("dm_channel_id") or None)
     if channel and channel != state.get("dm_channel_id"):
         state["dm_channel_id"] = channel
+
+
+def flush_pending(notifier: Notifier, store: StateStore, now: float) -> Optional[WatchResult]:
+    """Deliver a notice that failed to send earlier. Needs no status, so it can run before the
+    status is even fetched: an unreachable status API must not strand a notice already paid for.
+
+    Returns None when there is nothing to send (or a silence is active).
+    """
+    if store.load_silence() > now:
+        return None
+    state = store.load()
+    if not state.get("pending"):
+        return None
+    try:
+        _deliver(notifier, store, state, str(state["pending"]))
+    except NotifyError as exc:
+        store.save(state)
+        return WatchResult("notify_failed", str(exc))
+    state.pop("pending", None)
+    state["notified_at"] = now
+    store.save(state)
+    return WatchResult("resent")
 
 
 def watch_once(
@@ -171,29 +211,21 @@ def watch_once(
     min_duration_seconds: int = 300,
     repeat_after_seconds: int = 3600,
 ) -> WatchResult:
-    state = store.load()
-    if float(state.get("silence_until") or 0) > now:
+    if store.load_silence() > now:
         return WatchResult("silenced")
 
     # A message that could not be delivered earlier goes out FIRST, whatever the health is now:
     # it was already paid for, and if the service has since recovered, dropping it would leave the
     # approver never knowing about an outage that was analyzed. The cycle then carries on and may
     # follow it with the recovery notice.
-    if state.get("pending"):
-        try:
-            _deliver(notifier, store, state, str(state["pending"]))
-        except NotifyError as exc:
-            store.save(state)
-            return WatchResult("notify_failed", str(exc))
-        state.pop("pending", None)
-        state["notified_at"] = now
-        store.save(state)
-        resent = True
-    else:
-        resent = False
+    flushed = flush_pending(notifier, store, now)
+    if flushed is not None and flushed.action == "notify_failed":
+        return flushed
+    resent = flushed is not None
+    state = store.load()
 
     current = concerns(snapshot.get("status", {}))
-    keep = {k: state[k] for k in ("dm_channel_id", "silence_until") if k in state}
+    keep = {k: state[k] for k in ("dm_channel_id",) if k in state}
 
     if not current.services:
         if not state.get("fingerprint"):
@@ -220,6 +252,18 @@ def watch_once(
         return WatchResult("recovered" if notified else "blip_ended", ", ".join(names))
 
     if current.fingerprint != state.get("fingerprint"):
+        # A notified episode is being replaced. Whatever disappeared from it recovered (it did not
+        # go into maintenance: that is not a recovery), and the approver is still holding its
+        # alert, so announce that before the new episode starts.
+        previous = [part for part in str(state.get("fingerprint") or "").split("|") if part]
+        now_ids = {part for part in current.fingerprint.split("|") if part}
+        gone = [i for i in previous if i not in now_ids and i not in current.suppressed_ids]
+        if gone and state.get("notified_at"):
+            stored = state.get("names_by_id") or {}
+            try:
+                _deliver(notifier, store, keep, format_recovered([stored.get(i, i) for i in gone], status_url))
+            except NotifyError as exc:  # best effort, like every recovery notice
+                logger.warning("ops_agent_recovery_notice_failed %s", exc)
         state = {
             **keep,
             "fingerprint": current.fingerprint,

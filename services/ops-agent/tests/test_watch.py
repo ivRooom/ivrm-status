@@ -369,8 +369,11 @@ def test_the_watch_command_on_a_healthy_system_needs_no_aws_and_no_discord(monke
     class Client:
         def __init__(self, *_a, **_k) -> None: ...
 
-        def snapshot(self):
-            return snap()
+        def status(self):
+            return snap()["status"]
+
+        def history(self):
+            return {}
 
     def forbidden(*_a, **_k):
         raise AssertionError("boto3 must not be used on a healthy cycle")
@@ -388,7 +391,8 @@ def test_the_silence_command_writes_the_state(monkeypatch, tmp_path: Path, capsy
 
     monkeypatch.setenv("OPS_AGENT_STATE_PATH", str(tmp_path / "state.json"))
     assert cli.main(["--silence", "30"]) == 0
-    assert json.loads((tmp_path / "state.json").read_text())["silence_until"] > 0
+    assert json.loads((tmp_path / "state.json.silence").read_text())["until"] > 0
+    assert not (tmp_path / "state.json").exists()  # the silence never touches the watch state
     assert cli.main(["--silence", "0"]) == 64
 
 

@@ -41,8 +41,11 @@ class StatusClient:
         except json.JSONDecodeError as exc:
             raise StatusFetchError("response is not json") from exc
 
+    def status(self) -> Any:
+        return self.get("/api/status.json")
+
+    def history(self) -> Any:
+        return self.get("/api/status-history.json", "days=7")
+
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "status": self.get("/api/status.json"),
-            "history": self.get("/api/status-history.json", "days=7"),
-        }
+        return {"status": self.status(), "history": self.history()}

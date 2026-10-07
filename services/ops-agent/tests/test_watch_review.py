@@ -97,10 +97,12 @@ def test_an_open_incident_prevents_a_false_recovery_and_is_reported_when_it_last
     # The service is back up, but the incident is still open: not a recovery.
     still_open = with_incident(snap(), status="monitoring")
     assert cycle(store, notifier, analyzer, still_open, T0 + 400).action == "waiting"
-    assert all("回復" not in message for message in notifier.sent)
-    # The open incident is a new episode: reported once it has lasted, still no "recovery" yet.
+    # Herta really did recover, and that is announced; the incident is NOT claimed as recovered.
+    recoveries = [message for message in notifier.sent if "回復" in message]
+    assert len(recoveries) == 1 and "Herta" in recoveries[0] and "Incident" not in recoveries[0]
+    # The open incident is a new episode: reported once it has lasted, no second "recovery" yet.
     assert cycle(store, notifier, analyzer, still_open, T0 + 700).action == "notified"
-    assert "Incident" in notifier.sent[-1] and all("回復" not in message for message in notifier.sent)
+    assert "Incident" in notifier.sent[-1] and len([m for m in notifier.sent if "回復" in m]) == 1
     # Once the incident is resolved and everything is up, the recovery is announced.
     assert cycle(store, notifier, analyzer, with_incident(snap(), status="resolved"), T0 + 900).action == "recovered"
 

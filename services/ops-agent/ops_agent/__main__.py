@@ -11,7 +11,7 @@ from .budget import BudgetExceeded, BudgetLedger
 from .config import Settings
 from .notify import DiscordDM, NotifyError, NotifySettings
 from .status_client import StatusClient, StatusFetchError
-from .watch import StateStore, StdoutNotifier, silence, watch_once
+from .watch import StateStore, StdoutNotifier, flush_pending, silence, watch_once
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -97,12 +97,27 @@ def _watch(settings: Settings) -> int:
         notifier = DiscordDM(notify_settings) if notify_settings.configured else StdoutNotifier()
     except ValueError as exc:
         return _fail("notify_misconfigured", str(exc), 78)
+    store = StateStore(settings.state_path)
+    # A notice that could not be delivered goes out before anything is fetched: an unreachable
+    # status API must not strand a message that was already paid for.
+    flushed = flush_pending(notifier, store, time.time())
+    if flushed is not None:
+        print(json.dumps({"action": flushed.action, "detail": flushed.detail}, ensure_ascii=False), file=sys.stderr)
+        if flushed.action == "notify_failed":
+            return 4
+
+    client = StatusClient(settings.status_api_base, settings.request_timeout_seconds)
     try:
-        snapshot = StatusClient(settings.status_api_base, settings.request_timeout_seconds).snapshot()
+        # Only the current status decides whether anything happens. The history is for the model.
+        snapshot = {"status": client.status(), "history": {}}
     except (StatusFetchError, ValueError) as exc:
         return _fail("status_unavailable", str(exc), 3)
 
     def analyze_fn(snap):
+        try:
+            snap["history"] = client.history()
+        except (StatusFetchError, ValueError):
+            snap["history"] = {}  # an analysis without the 7 day history beats no notification
         import boto3  # only when something needs analyzing: a healthy cycle needs no AWS at all
         from botocore.config import Config
 
@@ -117,7 +132,7 @@ def _watch(settings: Settings) -> int:
         snapshot=snapshot,
         analyze_fn=analyze_fn,
         notifier=notifier,
-        store=StateStore(settings.state_path),
+        store=store,
         now=time.time(),
         status_url=settings.status_page_url,
         min_duration_seconds=settings.watch_min_duration_seconds,
