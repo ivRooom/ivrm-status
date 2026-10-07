@@ -17,7 +17,9 @@ Environment=AWS_PROFILE=ops-agent
 Environment=PYTHONPATH=/opt/ivrm-ops-agent
 Environment=OPS_AGENT_STATE_PATH=/var/lib/ivrm-ops-agent/state.json
 Environment=OPS_AGENT_LEDGER_PATH=/var/lib/ivrm-ops-agent/ledger.jsonl
-ExecStart=/usr/bin/python3.11 -s -m ops_agent --watch
+# A dedicated venv: the unit runs as its own user with -s (no user site), so packages
+# installed with a plain `pip install` by the operator would not be importable.
+ExecStart=/opt/ivrm-ops-agent/venv/bin/python -s -m ops_agent --watch
 TimeoutStartSec=120
 
 # Least privilege: this process only reads the public status, calls Bedrock and sends a DM.

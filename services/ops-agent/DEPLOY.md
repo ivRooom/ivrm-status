@@ -61,11 +61,20 @@
    - 権限: `aws/make_policy.py` の出力（Bedrockの `InvokeModel`、プロファイル経由のみ）。
    - 信頼ポリシー: `aws/role-trust-policy.example.json`（ホストのインスタンスロールだけが引き受けられる）。
 2. ホストのインスタンスロールに、`aws/host-assume-role-policy.example.json` を足す（`ivrm-ops-agent` だけを引き受けられる）。
-3. ホストにPython 3.11を入れる（Amazon Linux 2023: `sudo dnf install -y python3.11 python3.11-pip`、`pip3.11 install boto3`）。標準のPythonは3.9ですが、boto3の対応のため3.11を使います。
+3. ホストにPython 3.11を入れ、**専用の仮想環境**に依存を入れる（Amazon Linux 2023）。標準のPythonは3.9ですが、boto3の対応のため3.11を使います。
+
+   ```bash
+   sudo dnf install -y python3.11
+   sudo python3.11 -m venv /opt/ivrm-ops-agent/venv
+   sudo /opt/ivrm-ops-agent/venv/bin/pip install -r /opt/ivrm-ops-agent/requirements.txt
+   ```
+
+   サービスは、専用のユーザーで、`-s`（ユーザー領域を使わない）つきで動きます。そのため、`pip install boto3` を一般のユーザーで実行しても、サービスからは**読み込めません**（正常なときは、boto3を読み込まないので、最初の実行では気づけず、最初の障害の分析で、初めて失敗します）。必ず、この仮想環境に入れてください。
 4. 配置:
 
    ```text
    /opt/ivrm-ops-agent/ops_agent/            このリポジトリの services/ops-agent/ops_agent/
+   /opt/ivrm-ops-agent/requirements.txt      このリポジトリの services/ops-agent/requirements.txt
    /etc/ivrm-ops-agent/env                   deploy/env.example をもとに作成（chmod 600、root所有）
    /etc/ivrm-ops-agent/aws-config            deploy/aws-config.example をもとに作成（<ACCOUNT_ID> を置き換える）
    /etc/systemd/system/ivrm-ops-agent.service
@@ -83,13 +92,23 @@
 
    正常なときは、ジャーナルの最後に `{"action": "healthy", ...}` が出ます。`notify_misconfigured` や `status_unavailable` が出たら、設定を確認してください。
 
+   **これだけでは、AWSの設定は確認できません**（正常なときは、boto3もロールも使わないため）。続けて、本番と同じ環境で、AWSの準備を確認します。モデルは呼ばないので、費用はかかりません。
+
+   ```bash
+   sudo -u ivrm-ops-agent env PYTHONPATH=/opt/ivrm-ops-agent \
+     AWS_CONFIG_FILE=/etc/ivrm-ops-agent/aws-config AWS_PROFILE=ops-agent \
+     /opt/ivrm-ops-agent/venv/bin/python -s -m ops_agent --check
+   ```
+
+   `{"check": "ok", ...}` が出れば、boto3を読み込め、ロールを引き受けられています。`check_failed` のときは、理由（読み込めないパッケージ、認証情報の欠落など）が出ます。
+
 7. 有効化する: `sudo systemctl daemon-reload && sudo systemctl enable --now ivrm-ops-agent.timer`
 8. 一時停止（作業中など。1〜1440分）。**本番の状態ファイルを指定して、サービスと同じユーザーで**実行します（指定しないと、成功と表示されても、タイマーには効きません）。
 
    ```bash
    sudo -u ivrm-ops-agent env PYTHONPATH=/opt/ivrm-ops-agent \
      OPS_AGENT_STATE_PATH=/var/lib/ivrm-ops-agent/state.json \
-     python3.11 -m ops_agent --silence 60
+     /opt/ivrm-ops-agent/venv/bin/python -s -m ops_agent --silence 60
    ```
 
    出力の `silenced_until_epoch` が、一時停止の終了時刻です。一時停止は、状態ファイルとは別のファイル（`state.json.silence`）に書かれるので、タイマーの処理が動いている最中に実行しても、互いに上書きしません。一時停止の間も、未送信の通知は、再送しません（終了後に送ります）。

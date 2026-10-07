@@ -27,7 +27,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="print the request instead of calling Bedrock")
     parser.add_argument("--watch", action="store_true", help="one watch cycle for a timer: decide, analyze once, notify")
     parser.add_argument("--silence", type=int, metavar="MINUTES", help="suppress watch notifications for this long (1-1440)")
+    parser.add_argument("--check", action="store_true", help="verify the AWS setup (boto3, role, credentials) without calling the model")
     args = parser.parse_args(argv)
+    modes = [name for name, on in (("--watch", args.watch), ("--silence", args.silence is not None), ("--check", args.check)) if on]
+    if len(modes) > 1 or (modes and (args.dry_run or args.force)):
+        # --watch really sends messages and spends money, so a "dry run" of it must not exist.
+        return _fail("usage", "--watch, --silence and --check are exclusive and cannot be combined with --dry-run or --force", 64)
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")  # Windows consoles default to a legacy codepage
@@ -40,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
             return _fail("usage", str(exc), 64)
         print(json.dumps({"silenced_until_epoch": int(until)}))
         return 0
+    if args.check:
+        return _check(settings)
     if args.watch:
         return _watch(settings)
     try:
@@ -88,6 +95,30 @@ def main(argv: list[str] | None = None) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+def _check(settings: Settings) -> int:
+    """Deployment self-test. A healthy watch cycle never imports boto3, so without this a missing
+    package or a broken role would only show up during the first real incident."""
+    try:
+        import boto3  # the interpreter that runs the unit must be able to import it
+        from botocore.config import Config
+
+        session = boto3.Session(region_name=settings.bedrock_region)
+        credentials = session.get_credentials()
+        if credentials is None:
+            return _fail("check_failed", "no AWS credentials were found for this profile", 3)
+        credentials.get_frozen_credentials()  # forces the role to be assumed now
+        session.client(
+            "bedrock-runtime",
+            config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 0, "mode": "standard"}),
+        )
+    except ImportError as exc:
+        return _fail("check_failed", f"cannot import {exc.name or 'a required package'} with this interpreter", 3)
+    except Exception as exc:  # noqa: BLE001 - report the type only: never credentials or request bodies
+        return _fail("check_failed", f"{type(exc).__name__} while preparing the AWS client", 3)
+    print(json.dumps({"check": "ok", "region": settings.bedrock_region, "model": settings.bedrock_model_id}))
     return 0
 
 
