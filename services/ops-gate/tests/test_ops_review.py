@@ -138,10 +138,11 @@ def test_an_observation_from_the_future_is_refused(serve) -> None:
     assert verdict(serve, status(0, age=-3600)) == 1
 
 
-def test_a_down_network_with_an_outage_means_nobody_is_connected(serve) -> None:
-    assert verdict(serve, status(0, probe="unreachable", state="outage")) == 0
-    # even if the stale collector snapshot still lists players: the proxy does not answer
-    assert verdict(serve, status(5, probe="unreachable", state="outage")) == 0
+def test_an_unreachable_server_is_refused_even_when_it_is_reported_as_an_outage(serve) -> None:
+    # A handshake that times out or is malformed gives exactly this state, and established
+    # player sessions can survive it, so it proves nothing about who is connected.
+    assert verdict(serve, status(0, probe="unreachable", state="outage")) == 1
+    assert verdict(serve, status(5, probe="unreachable", state="outage")) == 1
 
 
 @pytest.mark.parametrize("state", ["operational", "degraded", "unknown", "maintenance"])

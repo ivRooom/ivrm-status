@@ -45,11 +45,13 @@ def online_players(status: object, now: float) -> int:
     collector's last snapshot, or to 0 when there is none. So the count is accepted only when
 
     * the observation is recent, and
-    * the live probe answered (probeStatus == "reachable"), so the count is the probe's own, or
-    * the probe says the network is down and the service is reported as an outage: nobody can
-      be connected through a proxy that does not answer.
+    * the live probe answered (probeStatus == "reachable"), so the count is the probe's own.
 
-    Anything else (stale, indeterminate, missing) raises, and the caller refuses.
+    There is deliberately no shortcut for a server that looks down. The API reports
+    probeStatus "unreachable" with an outage for a handshake that times out or is malformed as
+    well, and established player sessions can survive that, so "unreachable" says nothing
+    about who is connected. Anything else (stale, indeterminate, unreachable, missing) raises,
+    and the caller refuses: restart a server that is not answering by hand, over SSH.
     """
     services = status.get("services") if isinstance(status, dict) else None
     if not isinstance(services, list):
@@ -61,10 +63,7 @@ def online_players(status: object, now: float) -> int:
         age = now - _parse_time(service.get("checked_at"))
         if age > MAX_AGE_SECONDS or age < -MAX_FUTURE_SECONDS:
             raise ValueError("observation is not recent")
-        probe = meta.get("probeStatus")
-        if probe == "unreachable" and service.get("status") == "outage":
-            return 0
-        if probe != "reachable":
+        if meta.get("probeStatus") != "reachable":
             raise ValueError("no live probe answer")
         count = meta.get("playersOnline")
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
