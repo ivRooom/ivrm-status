@@ -36,7 +36,8 @@ from .notify import (
 
 logger = logging.getLogger("ops_agent")
 JST = timezone(timedelta(hours=9), "JST")
-HEALTHY = {"operational", "maintenance"}
+HEALTHY = {"operational"}
+MAINTENANCE = "maintenance"
 
 
 class Notifier(Protocol):
@@ -134,7 +135,10 @@ def concerns(status: Any) -> Concern:
     for service in services:
         if not isinstance(service, dict) or service.get("status") in HEALTHY:
             continue
-        if service.get("id") in covered:
+        if service.get("status") == MAINTENANCE or service.get("id") in covered:
+            # Under maintenance, whether the service says so itself or an in-progress maintenance
+            # record covers it. Not a concern, and not a recovery either, so it must be recorded
+            # as suppressed rather than skipped like a healthy service.
             suppressed_ids.add(str(service.get("id")))
             continue
         name = str(service.get("name") or service.get("id") or "不明")[:60]
@@ -171,8 +175,18 @@ def silence(store: StateStore, minutes: int, now: float) -> float:
     return until
 
 
-def _deliver(notifier: Notifier, store: StateStore, state: dict[str, Any], message: str) -> None:
-    """Send, remembering the DM channel. The caller has already persisted `pending`."""
+class Silenced(Exception):
+    """A silence started while the cycle was running; nothing may be sent now."""
+
+
+def _deliver(notifier: Notifier, store: StateStore, state: dict[str, Any], message: str, now: float) -> None:
+    """Send, remembering the DM channel. The caller has already persisted `pending`.
+
+    The silence is read again right here: --silence can be run at any moment, including while
+    the history is being fetched or the model is thinking, long after the cycle first looked.
+    """
+    if store.load_silence() > now:
+        raise Silenced()
     channel = notifier.send(message, state.get("dm_channel_id") or None)
     if channel and channel != state.get("dm_channel_id"):
         state["dm_channel_id"] = channel
@@ -190,7 +204,9 @@ def flush_pending(notifier: Notifier, store: StateStore, now: float) -> Optional
     if not state.get("pending"):
         return None
     try:
-        _deliver(notifier, store, state, str(state["pending"]))
+        _deliver(notifier, store, state, str(state["pending"]), now)
+    except Silenced:
+        return None  # keeps the notice; it goes out after the silence ends
     except NotifyError as exc:
         store.save(state)
         return WatchResult("notify_failed", str(exc))
@@ -245,7 +261,9 @@ def watch_once(
 
         if notified:
             try:
-                _deliver(notifier, store, keep, format_recovered(names, status_url))
+                _deliver(notifier, store, keep, format_recovered(names, status_url), now)
+            except Silenced:
+                pass  # the operator asked for quiet; a recovery notice is not worth holding back
             except NotifyError as exc:  # best effort: a recovery notice is not worth a retry loop
                 logger.warning("ops_agent_recovery_notice_failed %s", exc)
         store.save(keep)
@@ -261,7 +279,9 @@ def watch_once(
         if gone and state.get("notified_at"):
             stored = state.get("names_by_id") or {}
             try:
-                _deliver(notifier, store, keep, format_recovered([stored.get(i, i) for i in gone], status_url))
+                _deliver(notifier, store, keep, format_recovered([stored.get(i, i) for i in gone], status_url), now)
+            except Silenced:
+                pass
             except NotifyError as exc:  # best effort, like every recovery notice
                 logger.warning("ops_agent_recovery_notice_failed %s", exc)
         state = {
@@ -311,7 +331,12 @@ def watch_once(
 
 def _send(notifier: Notifier, store: StateStore, state: dict[str, Any], message: str, now: float, action: str) -> WatchResult:
     try:
-        _deliver(notifier, store, state, message)
+        _deliver(notifier, store, state, message, now)
+    except Silenced:
+        # An analysis was already saved as pending before this call and goes out after the silence.
+        # A reminder is simply asked again next cycle.
+        store.save(state)
+        return WatchResult("silenced")
     except NotifyError as exc:
         store.save(state)
         return WatchResult("notify_failed", str(exc))
