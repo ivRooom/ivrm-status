@@ -1,0 +1,8 @@
+# Files that run on Linux hosts must keep LF even when checked out on Windows (core.autocrlf=true
+# would otherwise turn "set -eu" into "set -eu\r", a syntax error in sh).
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+services/ops-gate/ops/* text eol=lf
+services/ops-gate/run.sh text eol=lf
+services/ops-agent/deploy/* text eol=lf

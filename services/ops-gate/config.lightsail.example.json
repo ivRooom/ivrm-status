@@ -1,0 +1,14 @@
+{
+  "approver_discord_ids": ["REPLACE_WITH_APPROVER_DISCORD_USER_ID"],
+  "ticket_secret_file": "/etc/ivrm-ops-gate/ticket-secret",
+  "state_dir": "/var/lib/ivrm-ops-gate",
+  "audit_log": "/var/log/ivrm-ops-gate/audit.jsonl",
+  "max_ticket_age_seconds": 900,
+  "operations": {
+    "restart_herta": {
+      "argv": ["/bin/sh", "/opt/ivrm-ops-gate/ops/restart-herta.sh"],
+      "timeout_seconds": 330,
+      "cooldown_seconds": 600
+    }
+  }
+}

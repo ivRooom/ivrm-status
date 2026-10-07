@@ -1,0 +1,24 @@
+{
+  "approver_discord_ids": ["REPLACE_WITH_APPROVER_DISCORD_USER_ID"],
+  "ticket_secret_file": "/etc/ivrm-ops-gate/ticket-secret",
+  "state_dir": "/var/lib/ivrm-ops-gate",
+  "audit_log": "/var/log/ivrm-ops-gate/audit.jsonl",
+  "max_ticket_age_seconds": 900,
+  "operations": {
+    "start_mc_resource": {
+      "argv": ["/bin/sh", "/opt/ivrm-ops-gate/ops/start-mc-resource.sh"],
+      "timeout_seconds": 300,
+      "cooldown_seconds": 300
+    },
+    "restart_mc_main": {
+      "argv": ["/bin/sh", "/opt/ivrm-ops-gate/ops/restart-mc-main.sh"],
+      "precheck_argv": [
+        "/usr/bin/python3",
+        "/opt/ivrm-ops-gate/ops/precheck_no_players.py",
+        "https://status.ivrm.jp/api/status.json"
+      ],
+      "timeout_seconds": 420,
+      "cooldown_seconds": 1800
+    }
+  }
+}

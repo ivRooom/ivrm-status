@@ -18,6 +18,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the OCI host baseline (see deploy-status-api.yml); the gate must run there.
+        python-version: ["3.9", "3.13"]
     defaults:
       run:
         working-directory: services/ops-gate
@@ -28,7 +33,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: services/ops-gate/requirements-dev.txt
 
@@ -39,4 +44,6 @@ jobs:
         run: pytest
 
       - name: Shell script syntax
-        run: sh -n run.sh
+        run: |
+          sh -n run.sh
+          for script in ops/*.sh; do sh -n "$script"; done
