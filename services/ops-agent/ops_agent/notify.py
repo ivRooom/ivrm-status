@@ -42,6 +42,10 @@ class NotifySettings:
         user_id = os.getenv("OPS_AGENT_DISCORD_USER_ID", "").strip()
         token = os.getenv("OPS_AGENT_DISCORD_BOT_TOKEN", "").strip()
         base = os.getenv("OPS_AGENT_DISCORD_API_BASE", API_BASE).rstrip("/")
+        if bool(user_id) != bool(token):
+            # One without the other is a typo or an omission, not "notifications off": fail loudly
+            # instead of quietly dropping every alert.
+            raise ValueError("set both OPS_AGENT_DISCORD_USER_ID and OPS_AGENT_DISCORD_BOT_TOKEN, or neither")
         if user_id and not _DISCORD_ID.fullmatch(user_id):
             raise ValueError("OPS_AGENT_DISCORD_USER_ID must be a Discord user id (17-20 digits)")
         if token and not _TOKEN.fullmatch(token):

@@ -81,10 +81,20 @@ class StateStore:
 class Concern:
     services: list[str]
     fingerprint: str
+    # Something is unhealthy but covered by an in-progress maintenance: nothing to report, and
+    # not a recovery either.
+    suppressed: bool = False
 
 
 def concerns(status: Any) -> Concern:
-    """Services that are not fine and are not covered by an in-progress maintenance."""
+    """What needs attention: unhealthy services not covered by an in-progress maintenance, and
+    unresolved incidents (the same rule as needs_analysis).
+
+    The fingerprint identifies WHICH services/incidents are affected, not their status. A service
+    that flips between degraded, outage and unknown is one continuing problem; keying on the
+    status would restart the debounce at every flip and a flapping service would never be
+    reported.
+    """
     services = status.get("services") if isinstance(status, dict) else None
     if not isinstance(services, list):
         return Concern(["status"], "status:invalid")  # cannot tell: a person should look
@@ -96,14 +106,20 @@ def concerns(status: Any) -> Concern:
                 covered.update(str(i) for i in ids)
     names: list[str] = []
     parts: list[str] = []
+    suppressed = False
     for service in services:
-        if not isinstance(service, dict):
+        if not isinstance(service, dict) or service.get("status") in HEALTHY:
             continue
-        if service.get("status") in HEALTHY or service.get("id") in covered:
+        if service.get("id") in covered:
+            suppressed = True
             continue
         names.append(str(service.get("name") or service.get("id") or "不明")[:60])
-        parts.append(f"{service.get('id')}:{service.get('status')}")
-    return Concern(sorted(names), "|".join(sorted(parts)))
+        parts.append(str(service.get("id")))
+    for incident in status.get("incidents") or []:
+        if isinstance(incident, dict) and str(incident.get("status", "")).lower() != "resolved":
+            names.append("Incident: " + str(incident.get("title") or incident.get("public_id") or "不明")[:50])
+            parts.append(f"incident:{incident.get('public_id')}")
+    return Concern(sorted(names), "|".join(sorted(parts)), suppressed)
 
 
 @dataclass(frozen=True)
@@ -149,6 +165,12 @@ def watch_once(
 
     current = concerns(snapshot.get("status", {}))
     keep = {k: state[k] for k in ("dm_channel_id", "silence_until") if k in state}
+
+    if not current.services and current.suppressed:
+        # Unhealthy, but a maintenance covers it. Do not report, and do not claim a recovery:
+        # forget the episode quietly. If the problem outlives the maintenance it starts again.
+        store.save(keep)
+        return WatchResult("suppressed_by_maintenance")
 
     if not current.services:
         if not state.get("fingerprint"):
