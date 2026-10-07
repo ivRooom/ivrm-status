@@ -51,6 +51,22 @@ def test_it_refuses_to_guess_or_widen(profile: dict) -> None:
         make_policy.build_policy(profile)
 
 
+@pytest.mark.parametrize("models", [None, "x", {"modelArn": "y"}, 5])
+def test_a_models_value_that_is_not_a_list_is_a_clean_error(models) -> None:
+    with pytest.raises(ValueError):
+        make_policy.build_policy({"inferenceProfileArn": PROFILE_ARN, "models": models})
+
+
+def test_global_profiles_are_refused_not_guessed(tmp_path: Path, capsys) -> None:
+    arn = "arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    with pytest.raises(ValueError, match="global"):
+        make_policy.build_policy({"inferenceProfileArn": arn, "models": MODELS})
+    saved = tmp_path / "profile.json"
+    saved.write_text(json.dumps({"inferenceProfileArn": arn, "models": MODELS}), encoding="utf-8")
+    assert make_policy.main(["--from-file", str(saved)]) == 2
+    assert "global" in capsys.readouterr().err
+
+
 def test_cli_works_offline_from_a_saved_profile(tmp_path: Path, capsys) -> None:
     saved = tmp_path / "profile.json"
     saved.write_text(json.dumps({"inferenceProfileArn": PROFILE_ARN, "models": MODELS}), encoding="utf-8")

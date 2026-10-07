@@ -1,6 +1,6 @@
 """Build the least-privilege IAM policy for ops-agent from a Bedrock inference profile.
 
-Cross-region inference profiles (jp.*, apac.*, global.*) need permission on the profile
+Regional cross-region inference profiles (jp.*, apac.*, us.*) need permission on the profile
 AND on the foundation-model ARN in every destination region. This reads the profile with
 the caller's own AWS credentials (read-only: bedrock:GetInferenceProfile) and prints a
 policy JSON. It changes nothing in AWS.
@@ -26,7 +26,14 @@ def build_policy(profile: dict[str, Any]) -> dict[str, Any]:
     profile_arn = profile.get("inferenceProfileArn")
     if not isinstance(profile_arn, str) or not _PROFILE_ARN.match(profile_arn):
         raise ValueError("profile has no valid inferenceProfileArn")
-    models = [item.get("modelArn") for item in profile.get("models", []) if isinstance(item, dict)]
+    if "/global." in profile_arn:
+        # Global profiles also need a regionless foundation-model ARN. That policy shape has not
+        # been verified here, so refuse rather than emit one that may be wrong or too wide.
+        raise ValueError("global.* profiles are not supported; use a regional profile such as jp.* or apac.*")
+    items = profile.get("models")
+    if not isinstance(items, list):
+        raise ValueError("profile has no models list")
+    models = [item.get("modelArn") for item in items if isinstance(item, dict)]
     if not models or not all(isinstance(arn, str) and _MODEL_ARN.match(arn) for arn in models):
         raise ValueError("profile has no valid foundation-model ARNs (refusing to guess a wildcard)")
 
