@@ -321,3 +321,11 @@ def test_the_guide_documents_the_webhook_and_the_test_command() -> None:
     assert "OPS_AGENT_DISCORD_WEBHOOK_URL" in guide and "--test-notify" in guide
     assert "Hertaの内部API" in guide  # why it is not used
     assert "両方あると" in guide  # the either/or rule
+
+
+def test_the_readme_summary_describes_both_destinations_and_the_setup_checks() -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    summary = readme[readme.index("## 定期実行") : readme.index("## 設定（環境変数）")]
+    assert "Webhook" in summary and "DM" in summary  # both ways to be notified
+    assert "--check" in summary and "--test-notify" in summary
+    assert "DMで通知します" not in summary  # the old DM-only wording
