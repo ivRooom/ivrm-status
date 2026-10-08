@@ -144,8 +144,10 @@ def _default_open(request: urllib.request.Request, timeout: float) -> Any:
 
 
 class DiscordWebhook:
-    """Post to one channel through its webhook. No bot, no token for the account: the URL can do
-    nothing but post to that channel, which is why it is the least privileged way to notify.
+    """Post to one channel through its webhook. No bot and no account credential. Whoever holds the
+    URL can post to that channel and can also modify or delete that webhook (Discord allows both
+    with the webhook token), but cannot touch the server, its roles or anything else, which is why
+    it is still much narrower than a bot token.
 
     The URL is a secret. It never appears in an error, a log line or repr(); the HTTP status is
     all that is reported.
@@ -161,15 +163,18 @@ class DiscordWebhook:
         self.recipient_key = "wh" + hashlib.sha256(match.group("id").encode("utf-8")).hexdigest()[:14]
 
     def send(self, message: str, channel_id: Optional[str] = None) -> str:
+        # wait=true: without it Discord may answer success before the message is saved, and the
+        # watch cycle would then mark a lost alert as delivered and never retry it. The configured
+        # URL (validated, no query allowed) stays separate from the URL that is requested.
         request = urllib.request.Request(
-            self.settings.webhook_url,
+            self.settings.webhook_url + "?wait=true",
             data=json.dumps({"content": _truncate(message), "allowed_mentions": {"parse": []}}).encode("utf-8"),
             method="POST",
             headers={"Content-Type": "application/json", "User-Agent": "ivrm-ops-agent (https://status.ivrm.jp, 1.0)"},
         )
         try:
             with self._open(request, self.settings.timeout_seconds) as response:
-                response.read(200_000)  # 204 No Content on success; nothing to keep
+                response.read(200_000)  # 200 with the saved message on success; nothing to keep
         except urllib.error.HTTPError as exc:  # the status only: the body and the URL stay out of it
             raise NotifyError(f"discord webhook returned HTTP {exc.code}", exc.code) from None
         except (OSError, ValueError) as exc:

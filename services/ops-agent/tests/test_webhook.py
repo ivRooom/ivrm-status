@@ -126,9 +126,14 @@ class Hook(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         type(self).requests.append({"path": self.path, "body": body, "auth": self.headers.get("Authorization")})
-        self.send_response(type(self).status)
+        status = type(self).status
+        if status == 204 and "wait=true" in self.path:
+            status = 200  # Discord confirms a saved message only when asked to wait
+        self.send_response(status)
         self.end_headers()
-        if type(self).status >= 400:  # an error body that echoes everything it was given
+        if status == 200:
+            self.wfile.write(json.dumps({"id": "1", "content": body.get("content", "")}).encode())
+        elif status >= 400:  # an error body that echoes everything it was given
             self.wfile.write(json.dumps({"message": "echo", "path": self.path, "body": body}).encode())
 
     def log_message(self, *_args) -> None:
@@ -149,7 +154,7 @@ def test_a_message_is_posted_with_mentions_disabled_and_no_credentials(hook) -> 
     notifier, _ = hook
     assert notifier.send("hello <@123456789012345678> @everyone") == ""
     request = Hook.requests[0]
-    assert request["path"] == f"/api/webhooks/{WEBHOOK_ID}/{SECRET}"
+    assert request["path"] == f"/api/webhooks/{WEBHOOK_ID}/{SECRET}?wait=true"  # see the test below
     assert request["body"]["allowed_mentions"] == {"parse": []}
     assert request["auth"] is None  # a webhook needs no account credential at all
 
@@ -329,3 +334,29 @@ def test_the_readme_summary_describes_both_destinations_and_the_setup_checks() -
     assert "Webhook" in summary and "DM" in summary  # both ways to be notified
     assert "--check" in summary and "--test-notify" in summary
     assert "DMで通知します" not in summary  # the old DM-only wording
+
+
+# --- review: wait=true, and an accurate account of what a leaked URL allows ---------------------------------
+
+
+def test_the_request_asks_discord_to_confirm_the_message_was_saved(hook) -> None:
+    notifier, _ = hook
+    notifier.send("hello")
+    assert Hook.requests[0]["path"].endswith("?wait=true")
+
+
+def test_the_configured_url_stays_free_of_a_query_even_though_the_request_adds_one(monkeypatch) -> None:
+    monkeypatch.setenv("OPS_AGENT_DISCORD_WEBHOOK_URL", URL + "?wait=true")
+    with pytest.raises(ValueError):
+        NotifySettings.from_env()  # the validated value never carries a query; only the request does
+    assert "?" not in settings().webhook_url
+
+
+def test_no_document_or_comment_claims_a_leaked_url_can_only_post() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("README.md", "DEPLOY.md", "deploy/env.example", "ops_agent/notify.py"):
+        text = (root / relative).read_text(encoding="utf-8")
+        for claim in ("投稿だけ", "nothing but post", "post-only", "only post"):
+            assert claim not in text, (relative, claim)
+    deploy = (root / "DEPLOY.md").read_text(encoding="utf-8")
+    assert "変更・削除" in deploy  # what a leak does allow is stated
