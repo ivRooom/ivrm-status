@@ -44,7 +44,9 @@ def test_conflicting_flags_are_refused_before_anything_runs(monkeypatch, tmp_pat
         raise AssertionError("nothing may run when the flags conflict")
 
     monkeypatch.setattr(cli, "StatusClient", boom)
+    monkeypatch.setattr(cli, "build_notifier", boom)
     monkeypatch.setattr(cli, "DiscordDM", boom)
+    monkeypatch.setattr(cli, "DiscordWebhook", boom)
     monkeypatch.setattr(cli, "_watch", boom)
     monkeypatch.setattr(cli, "_check", boom)
     assert cli.main(argv) == 64

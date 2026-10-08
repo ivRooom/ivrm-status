@@ -9,7 +9,7 @@ import time
 from .agent import AnalysisFailed, analyze, build_request, needs_analysis
 from .budget import BudgetExceeded, BudgetLedger
 from .config import Settings
-from .notify import DiscordDM, NotifyError, NotifySettings
+from .notify import DiscordDM, DiscordWebhook, NotifyError, NotifySettings, build_notifier
 from .status_client import StatusClient, StatusFetchError
 from .watch import StateStore, StdoutNotifier, flush_pending, silence, watch_once
 
@@ -28,8 +28,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--watch", action="store_true", help="one watch cycle for a timer: decide, analyze once, notify")
     parser.add_argument("--silence", type=int, metavar="MINUTES", help="suppress watch notifications for this long (1-1440)")
     parser.add_argument("--check", action="store_true", help="verify the AWS setup (boto3, role, credentials) without calling the model")
+    parser.add_argument("--test-notify", action="store_true", help="send one short test message to the configured Discord destination")
     args = parser.parse_args(argv)
-    modes = [name for name, on in (("--watch", args.watch), ("--silence", args.silence is not None), ("--check", args.check)) if on]
+    modes = [
+        name
+        for name, on in (
+            ("--watch", args.watch),
+            ("--silence", args.silence is not None),
+            ("--check", args.check),
+            ("--test-notify", args.test_notify),
+        )
+        if on
+    ]
     if len(modes) > 1 or (modes and (args.dry_run or args.force)):
         # --watch really sends messages and spends money, so a "dry run" of it must not exist.
         return _fail("usage", "--watch, --silence and --check are exclusive and cannot be combined with --dry-run or --force", 64)
@@ -47,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.check:
         return _check(settings)
+    if args.test_notify:
+        return _test_notify(settings)
     if args.watch:
         return _watch(settings)
     try:
@@ -122,10 +134,30 @@ def _check(settings: Settings) -> int:
     return 0
 
 
+def _test_notify(settings: Settings) -> int:
+    """Send one short message through the configured destination, with no model and no state, so the
+    real Discord path can be verified at setup time instead of during the first incident."""
+    try:
+        notify_settings = NotifySettings.from_env()
+        notifier = build_notifier(notify_settings)
+    except ValueError as exc:
+        return _fail("notify_misconfigured", str(exc), 78)
+    if notifier is None:
+        return _fail("notify_not_configured", "set OPS_AGENT_DISCORD_WEBHOOK_URL (or the bot DM settings) first", 78)
+    try:
+        notifier.send(
+            "**[ivRooom Status] 通知の試験**\nこのメッセージが見えれば、ops-agentから届いています。障害ではありません。",
+        )
+    except NotifyError as exc:  # the status only; never the URL or the token
+        return _fail("notify_failed", str(exc), 4)
+    print(json.dumps({"test_notify": "sent", "destination": "webhook" if notify_settings.webhook_url else "dm"}))
+    return 0
+
+
 def _watch(settings: Settings) -> int:
     try:
         notify_settings = NotifySettings.from_env()
-        notifier = DiscordDM(notify_settings) if notify_settings.configured else StdoutNotifier()
+        notifier = build_notifier(notify_settings) or StdoutNotifier()
     except ValueError as exc:
         return _fail("notify_misconfigured", str(exc), 78)
     store = StateStore(settings.state_path)

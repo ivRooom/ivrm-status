@@ -62,7 +62,7 @@ def run_cli(monkeypatch, tmp_path: Path, api, at: float, *, state: Path | None =
 
     monkeypatch.setattr(cli, "StatusClient", api)
     monkeypatch.setattr(cli, "analyze", fake_analyze)
-    monkeypatch.setattr(cli, "DiscordDM", Discord)
+    monkeypatch.setattr(cli, "build_notifier", lambda settings: Discord(settings))
     monkeypatch.setattr(boto3, "client", lambda *_a, **_k: object())
     monkeypatch.setattr(cli.time, "time", lambda: at)
     monkeypatch.setenv("OPS_AGENT_STATE_PATH", str(state or tmp_path / "state.json"))
