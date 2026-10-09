@@ -168,26 +168,46 @@ class Bootstrap:
         )
         return role_arn
 
-    def ensure_role_policy(self, policy: dict[str, Any]) -> None:
-        self.mutate(
-            f"attach inline policy {ROLE_POLICY_NAME} to {ROLE_NAME} (InvokeModel on the profile only)",
-            ["aws", "iam", "put-role-policy", "--role-name", ROLE_NAME, "--policy-name", ROLE_POLICY_NAME,
-             "--policy-document", _json(policy)],
-        )
+    def inline_matches(self, role: str, name: str, document: dict[str, Any]) -> bool:
+        """True if the policy exists as expected, False if absent; a different one is refused."""
+        try:
+            found = self.run(["aws", "iam", "get-role-policy", "--role-name", role, "--policy-name", name, "--output", "json"])
+        except Failed as exc:
+            if "NoSuchEntity" not in str(exc):
+                raise
+            return False
+        if _canon(found.get("PolicyDocument")) != _canon(document):
+            raise Refused(f"the inline policy {name} on {role} already exists with DIFFERENT contents; review it by hand, it was not overwritten")
+        return True
 
-    def ensure_host_policy(self) -> None:
-        document = {
+    def host_document(self) -> dict[str, Any]:
+        return {
             "Version": "2012-10-17",
             "Statement": [
                 {"Sid": "AssumeOnlyTheOpsAgentRole", "Effect": "Allow", "Action": "sts:AssumeRole",
                  "Resource": f"arn:aws:iam::{self.args.account_id}:role/{ROLE_NAME}"}
             ],
         }
-        self.mutate(
+
+    def put_inline_policy(self, role: str, name: str, document: dict[str, Any], description: str) -> None:
+        """put-role-policy replaces a policy of the same name, so read it first: an identical one is
+        skipped, a different one is refused (nothing is overwritten)."""
+        if self.inline_matches(role, name, document):
+            self.say("skip", f"inline policy {name} on {role} is already as expected")
+            return
+        self.mutate(description, ["aws", "iam", "put-role-policy", "--role-name", role, "--policy-name", name,
+                                  "--policy-document", _json(document)])
+
+    def ensure_role_policy(self, policy: dict[str, Any]) -> None:
+        self.put_inline_policy(ROLE_NAME, ROLE_POLICY_NAME, policy,
+                               f"attach inline policy {ROLE_POLICY_NAME} to {ROLE_NAME} (InvokeModel on the profile only)")
+
+    def ensure_host_policy(self) -> None:
+        document = self.host_document()
+        self.put_inline_policy(
+            self.args.host_role, HOST_POLICY_NAME, document,
             f"add inline policy {HOST_POLICY_NAME} to the HOST role {self.args.host_role} (sts:AssumeRole on {ROLE_NAME} only; "
             "this is the one change to an existing production role)",
-            ["aws", "iam", "put-role-policy", "--role-name", self.args.host_role, "--policy-name", HOST_POLICY_NAME,
-             "--policy-document", _json(document)],
         )
 
     def ensure_budget(self) -> None:
@@ -231,7 +251,8 @@ class Bootstrap:
 
     def verify(self, role_arn: str, host_arn: str, profile_arn: str, model_arns: list[str]) -> None:
         model = model_arns[0]
-        other_model = model.rsplit("/", 1)[0] + "/anthropic.claude-sonnet-4-5-20250929-v1:0"
+        # a negative control that cannot be one of the allowed models, whatever profile was chosen
+        other_model = model.rsplit("/", 1)[0] + "/anthropic.ops-agent-negative-control-v1:0"
         checks = [
             ("the role may invoke the profile", role_arn, "bedrock:InvokeModel", profile_arn, None, "allowed"),
             ("the role may invoke the destination model through the profile", role_arn, "bedrock:InvokeModel", model, profile_arn, "allowed"),
@@ -244,7 +265,10 @@ class Bootstrap:
         for label, source, action, resource, context, expected in checks:
             decision = "unknown"
             for attempt in range(4):  # IAM changes take a few seconds to be visible
-                decision = self.simulate(source, action, resource, context)
+                try:
+                    decision = self.simulate(source, action, resource, context)
+                except Failed:
+                    decision = "error"  # a just-created role may not be visible yet
                 good = decision == "allowed" if expected == "allowed" else decision in {"implicitDeny", "explicitDeny"}
                 if good:
                     break
@@ -262,6 +286,9 @@ class Bootstrap:
         self.preflight()
         host_arn = self.host_role_arn()
         policy, profile_arn = self.permissions_policy()
+        # every refusal happens before the first change, so a refused run leaves nothing half-done
+        self.inline_matches(self.args.host_role, HOST_POLICY_NAME, self.host_document())
+        self.inline_matches(ROLE_NAME, ROLE_POLICY_NAME, policy)
         role_arn = self.ensure_role(host_arn)
         self.ensure_role_policy(policy)
         self.ensure_host_policy()

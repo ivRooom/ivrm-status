@@ -33,6 +33,8 @@ class FakeAws:
         self.identity = {"Account": account, "Arn": arn}
         self.roles = {HOST: {"Arn": HOST_ARN}}
         self.budgets: list[str] = []
+        self.inline: dict[tuple, dict] = {}
+        self.simulate_errors = 0
         self.simulate_answer = self.intended
         self.simulate_calls = 0
 
@@ -52,7 +54,13 @@ class FakeAws:
         if (service, op) == ("iam", "create-role"):
             self.roles[arg("--role-name")] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": json.loads(arg("--assume-role-policy-document"))}
             return {}
+        if (service, op) == ("iam", "get-role-policy"):
+            key = (arg("--role-name"), arg("--policy-name"))
+            if key not in self.inline:
+                raise bootstrap.Failed("An error occurred (NoSuchEntity) when calling the GetRolePolicy operation")
+            return {"PolicyDocument": self.inline[key]}
         if (service, op) == ("iam", "put-role-policy"):
+            self.inline[(arg("--role-name"), arg("--policy-name"))] = json.loads(arg("--policy-document"))
             return None
         if (service, op) == ("budgets", "describe-budgets"):
             return {"Budgets": [{"BudgetName": n} for n in self.budgets]}
@@ -61,6 +69,9 @@ class FakeAws:
             return None
         if (service, op) == ("iam", "simulate-principal-policy"):
             self.simulate_calls += 1
+            if self.simulate_errors > 0:
+                self.simulate_errors -= 1
+                raise bootstrap.Failed("An error occurred (NoSuchEntity) when calling the SimulatePrincipalPolicy operation")
             context = None
             if "--context-entries" in argv:
                 context = arg("--context-entries")
@@ -241,7 +252,7 @@ def test_verification_checks_the_intended_boundaries() -> None:
 
     def answer(action, resource, context):
         seen.append((action, resource, context is not None))
-        denied = (action == "iam:CreateUser") or (action == "bedrock:InvokeModel" and context is None and resource in MODELS) or "sonnet" in resource
+        denied = (action == "iam:CreateUser") or (action == "bedrock:InvokeModel" and context is None and resource in MODELS) or "negative-control" in resource
         return "implicitDeny" if denied else "allowed"
 
     aws.simulate_answer = answer
@@ -271,3 +282,46 @@ def test_show_costs_is_read_only_and_sorted(capsys) -> None:
     out = capsys.readouterr().out
     assert out.index("Amazon EC2") < out.index("Bedrock Edition")
     assert aws.mutations() == []
+
+
+def test_an_existing_different_inline_policy_is_never_overwritten(capsys) -> None:
+    aws = FakeAws()
+    aws.inline[(HOST, "ivrm-ops-agent-assume")] = {"Version": "2012-10-17", "Statement": []}
+    assert run(aws, "--apply") == 2
+    assert not any(c[2] == "put-role-policy" and c[c.index("--role-name") + 1] == HOST for c in aws.calls)
+    assert "DIFFERENT contents" in capsys.readouterr().err
+
+
+def test_a_different_policy_on_the_agent_role_is_refused_before_any_write() -> None:
+    aws = FakeAws()
+    aws.roles["ivrm-ops-agent"] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": TRUST}
+    aws.inline[("ivrm-ops-agent", "ops-agent-bedrock-invoke")] = {"Version": "2012-10-17", "Statement": []}
+    assert run(aws, "--apply") == 2 and aws.mutations() == []
+
+
+def test_the_negative_control_model_is_never_an_allowed_one(monkeypatch) -> None:
+    aws = FakeAws()
+    seen = []
+    base = aws.intended
+
+    def answer(action, resource, context):
+        seen.append(resource)
+        return base(action, resource, context)
+
+    aws.simulate_answer = answer
+    run(aws, "--apply")
+    controls = [r for r in seen if r.startswith("arn:aws:bedrock") and "foundation-model" in r and r not in MODELS]
+    assert controls and not set(controls) & set(MODELS)
+
+
+def test_transient_simulation_errors_right_after_creation_are_retried() -> None:
+    aws = FakeAws()
+    aws.simulate_errors = 2
+    assert run(aws, "--apply") == 0
+
+
+def test_a_refused_host_policy_leaves_nothing_half_created() -> None:
+    aws = FakeAws()
+    aws.inline[(HOST, "ivrm-ops-agent-assume")] = {"Version": "2012-10-17", "Statement": []}
+    assert run(aws, "--apply") == 2
+    assert aws.mutations() == []  # not even the role or the budget
