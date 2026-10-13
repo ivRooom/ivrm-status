@@ -228,6 +228,9 @@ class Bootstrap:
         )
 
     def ensure_budget(self) -> None:
+        if self.args.no_budget:
+            self.say("skip", "no budget is created (--no-budget); an existing budget covers this account")
+            return
         listed = self.run(["aws", "budgets", "describe-budgets", "--account-id", self.args.account_id, "--output", "json"])
         names = [b.get("BudgetName") for b in (listed or {}).get("Budgets", [])] if isinstance(listed, dict) else []
         if BUDGET_NAME in names:
@@ -357,6 +360,7 @@ def parse(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument("--account-id", required=True, help="the 12 digit account id; the credentials must belong to it")
     parser.add_argument("--host-role", help="name of the instance profile role of the host that runs ops-agent")
     parser.add_argument("--email", help="where the budget alerts go")
+    parser.add_argument("--no-budget", action="store_true", help="do not create a budget (use an existing one); --email and --budget-usd are then not needed")
     parser.add_argument("--budget-usd", type=float, default=10.0, help="monthly budget in USD (about 1500 JPY)")
     parser.add_argument("--service-filter", action="append", default=[], help="limit the budget to this exact service name (repeatable); default is the whole account")
     parser.add_argument("--profile-id", default=DEFAULT_PROFILE)
@@ -374,6 +378,8 @@ def validate(args: argparse.Namespace) -> None:
         return
     if not args.host_role or not _ROLE.fullmatch(args.host_role):
         raise Refused("--host-role is required (the name of the instance profile role, not its ARN)")
+    if args.no_budget:
+        return
     if not args.email or not _EMAIL.fullmatch(args.email):
         raise Refused("--email is required and must be a valid address")
     if not 1 <= args.budget_usd <= 1000:
