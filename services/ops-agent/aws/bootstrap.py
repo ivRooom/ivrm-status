@@ -313,10 +313,13 @@ class Bootstrap:
         self.ensure_budget()
         if not self.args.apply:
             print(f"\nNothing was changed. {len(self.mutations)} change(s) are planned above; add --apply to make them.")
+            print(f"The role ARN for deploy/aws-config (role_arn): {role_arn}")
             print("The permissions policy that would be attached:\n" + json.dumps(policy, indent=2))
             return
         self.verify(role_arn, host_arn, profile_arn, policy["Statement"][1]["Resource"])
-        print(f"\nDone: {len(self.mutations)} change(s). Next: run the ops-agent --check on the host (see DEPLOY.md).")
+        print(f"\nDone: {len(self.mutations)} change(s).")
+        print(f"Put this in role_arn of /etc/ivrm-ops-agent/aws-config on the host: {role_arn}")
+        print("Next: run the ops-agent --check on the host (see DEPLOY.md).")
 
 
 def _strip_sid(document: dict[str, Any]) -> dict[str, Any]:

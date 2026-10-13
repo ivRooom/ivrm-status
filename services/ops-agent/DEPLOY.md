@@ -80,7 +80,7 @@ Hertaの内部API（メッセージ送信）は、使いません。`127.0.0.1` 
    /opt/ivrm-ops-agent/ops_agent/            このリポジトリの services/ops-agent/ops_agent/
    /opt/ivrm-ops-agent/requirements.txt      このリポジトリの services/ops-agent/requirements.txt
    /etc/ivrm-ops-agent/env                   deploy/env.example をもとに作成（chmod 600、root所有）
-   /etc/ivrm-ops-agent/aws-config            deploy/aws-config.example をもとに作成（<ACCOUNT_ID> を置き換える）
+   /etc/ivrm-ops-agent/aws-config            deploy/aws-config.example をもとに作成（role_arn は、aws/bootstrap.py が最後に表示するARNをそのまま入れる）
    /etc/systemd/system/ivrm-ops-agent.service
    /etc/systemd/system/ivrm-ops-agent.timer
    ```

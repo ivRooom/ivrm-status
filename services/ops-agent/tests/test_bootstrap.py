@@ -376,3 +376,13 @@ def test_a_failing_simulation_reports_the_aws_error(capsys) -> None:
     aws.simulate_errors = 999
     assert run(aws, "--apply") == 3
     assert "SimulatePrincipalPolicy" in capsys.readouterr().out
+
+
+def test_the_role_arn_to_deploy_is_printed_as_iam_reports_it(capsys) -> None:
+    aws = FakeAws()
+    pathed = f"arn:aws:iam::{ACCOUNT}:role/team/ivrm-ops-agent"
+    aws.roles["ivrm-ops-agent"] = {"Arn": pathed, "AssumeRolePolicyDocument": TRUST}
+    run(aws, "--apply")
+    assert f"role_arn of /etc/ivrm-ops-agent/aws-config on the host: {pathed}" in capsys.readouterr().out
+    run(FakeAws())
+    assert ROLE_ARN in capsys.readouterr().out  # the plan prints it too
