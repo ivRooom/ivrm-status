@@ -34,6 +34,7 @@ class FakeAws:
         self.roles = {HOST: {"Arn": HOST_ARN}}
         self.budgets: list[str] = []
         self.inline: dict[tuple, dict] = {}
+        self.attached: list[str] = []
         self.simulate_errors = 0
         self.simulate_answer = self.intended
         self.simulate_calls = 0
@@ -54,6 +55,11 @@ class FakeAws:
         if (service, op) == ("iam", "create-role"):
             self.roles[arg("--role-name")] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": json.loads(arg("--assume-role-policy-document"))}
             return {}
+        if (service, op) == ("iam", "list-role-policies"):
+            name = arg("--role-name")
+            return {"PolicyNames": sorted(p for (r, p) in self.inline if r == name)}
+        if (service, op) == ("iam", "list-attached-role-policies"):
+            return {"AttachedPolicies": [{"PolicyName": n} for n in self.attached]}
         if (service, op) == ("iam", "get-role-policy"):
             key = (arg("--role-name"), arg("--policy-name"))
             if key not in self.inline:
@@ -325,3 +331,48 @@ def test_a_refused_host_policy_leaves_nothing_half_created() -> None:
     aws.inline[(HOST, "ivrm-ops-agent-assume")] = {"Version": "2012-10-17", "Statement": []}
     assert run(aws, "--apply") == 2
     assert aws.mutations() == []  # not even the role or the budget
+
+
+def test_an_existing_role_with_an_attached_managed_policy_is_refused(capsys) -> None:
+    aws = FakeAws()
+    aws.roles["ivrm-ops-agent"] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": TRUST}
+    aws.attached = ["AmazonS3ReadOnlyAccess"]
+    assert run(aws, "--apply") == 2 and aws.mutations() == []
+    assert "AmazonS3ReadOnlyAccess" in capsys.readouterr().err
+
+
+def test_an_existing_role_with_another_inline_policy_is_refused() -> None:
+    aws = FakeAws()
+    aws.roles["ivrm-ops-agent"] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": TRUST}
+    aws.inline[("ivrm-ops-agent", "something-else")] = {"Version": "2012-10-17", "Statement": []}
+    assert run(aws, "--apply") == 2 and aws.mutations() == []
+
+
+def test_the_expected_inline_policy_alone_on_an_existing_role_is_fine() -> None:
+    aws = FakeAws()
+    aws.roles["ivrm-ops-agent"] = {"Arn": ROLE_ARN, "AssumeRolePolicyDocument": TRUST}
+    assert run(aws, "--apply") == 0
+
+
+def test_the_host_policy_uses_the_arn_iam_reports_including_the_role_path() -> None:
+    aws = FakeAws()
+    pathed = f"arn:aws:iam::{ACCOUNT}:role/team/ivrm-ops-agent"
+    aws.roles["ivrm-ops-agent"] = {"Arn": pathed, "AssumeRolePolicyDocument": TRUST}
+    assert run(aws, "--apply") == 0
+    put = next(c for c in aws.calls if c[2] == "put-role-policy" and c[c.index("--role-name") + 1] == HOST)
+    assert json.loads(put[put.index("--policy-document") + 1])["Statement"][0]["Resource"] == pathed
+
+
+def test_the_partition_follows_the_credentials() -> None:
+    aws = FakeAws(arn=f"arn:aws-cn:iam::{ACCOUNT}:user/admin")
+    aws.roles[HOST] = {"Arn": f"arn:aws-cn:iam::{ACCOUNT}:role/{HOST}"}
+    run(aws, "--apply")
+    put = next(c for c in aws.calls if c[2] == "put-role-policy" and c[c.index("--role-name") + 1] == HOST)
+    assert json.loads(put[put.index("--policy-document") + 1])["Statement"][0]["Resource"].startswith("arn:aws-cn:iam::")
+
+
+def test_a_failing_simulation_reports_the_aws_error(capsys) -> None:
+    aws = FakeAws()
+    aws.simulate_errors = 999
+    assert run(aws, "--apply") == 3
+    assert "SimulatePrincipalPolicy" in capsys.readouterr().out

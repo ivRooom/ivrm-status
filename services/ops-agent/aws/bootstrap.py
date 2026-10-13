@@ -90,6 +90,7 @@ class Bootstrap:
         self.run = runner
         self.sleep = sleep
         self.mutations: list[str] = []
+        self.partition = "aws"
 
     # --- output -------------------------------------------------------------------------------
 
@@ -114,6 +115,8 @@ class Bootstrap:
         arn = str(identity.get("Arn", ""))
         if arn.endswith(":root") and not self.args.allow_root:
             raise Refused("these are the account root credentials; use an administrator user or role (or pass --allow-root if you really must)")
+        parts = arn.split(":")
+        self.partition = parts[1] if len(parts) > 5 and parts[0] == "arn" else "aws"
         self.say("ok", f"account {self.args.account_id}, as {arn.split(':', 5)[-1]}")
 
     def host_role_arn(self) -> str:
@@ -139,34 +142,48 @@ class Bootstrap:
         self.say("ok", f"policy for {self.args.profile_id}: InvokeModel on the profile and its {len(policy['Statement'][1]['Resource'])} destination model(s)")
         return policy, str(profile["inferenceProfileArn"])
 
-    def ensure_role(self, host_arn: str) -> str:
-        trust = {
+    def expected_trust(self, host_arn: str) -> dict[str, Any]:
+        return {
             "Version": "2012-10-17",
             "Statement": [
                 {"Sid": "OnlyTheOpsAgentHostRole", "Effect": "Allow", "Principal": {"AWS": host_arn}, "Action": "sts:AssumeRole"}
             ],
         }
-        role_arn = f"arn:aws:iam::{self.args.account_id}:role/{ROLE_NAME}"
+
+    def inspect_role(self, host_arn: str) -> tuple[bool, str]:
+        """Read-only. Returns (exists, arn). An existing role must be exactly what we would create:
+        the same trust policy and no other policy of any kind. The ARN is the one IAM reports (it
+        carries the role's path); a role that does not exist yet gets the ARN it will have."""
         try:
             existing = self.run(["aws", "iam", "get-role", "--role-name", ROLE_NAME, "--output", "json"])
         except Failed as exc:
             if "NoSuchEntity" not in str(exc):
                 raise
-            existing = None
-        if existing:
-            document = existing["Role"].get("AssumeRolePolicyDocument", {})
-            if _canon(_strip_sid(document)) != _canon(_strip_sid(trust)):
-                raise Refused(f"the role {ROLE_NAME} already exists with a DIFFERENT trust policy; review it by hand, nothing was changed")
-            self.say("skip", f"role {ROLE_NAME} already exists with the expected trust policy")
-            return role_arn
+            return False, f"arn:{self.partition}:iam::{self.args.account_id}:role/{ROLE_NAME}"
+        role = existing["Role"]
+        if _canon(_strip_sid(role.get("AssumeRolePolicyDocument", {}))) != _canon(_strip_sid(self.expected_trust(host_arn))):
+            raise Refused(f"the role {ROLE_NAME} already exists with a DIFFERENT trust policy; review it by hand, nothing was changed")
+        inline = (self.run(["aws", "iam", "list-role-policies", "--role-name", ROLE_NAME, "--output", "json"]) or {}).get("PolicyNames", [])
+        attached = (self.run(["aws", "iam", "list-attached-role-policies", "--role-name", ROLE_NAME, "--output", "json"]) or {}).get("AttachedPolicies", [])
+        extra = [n for n in inline if n != ROLE_POLICY_NAME] + [a.get("PolicyName", "?") for a in attached]
+        if extra:
+            raise Refused(f"the role {ROLE_NAME} already has other policies ({', '.join(extra)}), so it is broader than intended; review it by hand, nothing was changed")
+        arn = role.get("Arn")
+        if not isinstance(arn, str) or not arn.startswith("arn:"):
+            raise Failed(f"IAM returned no ARN for the role {ROLE_NAME}")
+        self.say("skip", f"role {ROLE_NAME} already exists, with the expected trust policy and no other policy")
+        return True, arn
+
+    def ensure_role(self, host_arn: str, exists: bool) -> None:
+        if exists:
+            return
         self.mutate(
             f"create role {ROLE_NAME}, trusted only by {host_arn.split('/')[-1]}",
-            ["aws", "iam", "create-role", "--role-name", ROLE_NAME, "--assume-role-policy-document", _json(trust),
+            ["aws", "iam", "create-role", "--role-name", ROLE_NAME, "--assume-role-policy-document", _json(self.expected_trust(host_arn)),
              "--description", "ivrm-status ops-agent: invoke one Bedrock inference profile",
              "--max-session-duration", "3600", "--tags", "Key=project,Value=ivrm-status", "Key=owner,Value=ops-agent",
              "--output", "json"],
         )
-        return role_arn
 
     def inline_matches(self, role: str, name: str, document: dict[str, Any]) -> bool:
         """True if the policy exists as expected, False if absent; a different one is refused."""
@@ -180,12 +197,12 @@ class Bootstrap:
             raise Refused(f"the inline policy {name} on {role} already exists with DIFFERENT contents; review it by hand, it was not overwritten")
         return True
 
-    def host_document(self) -> dict[str, Any]:
+    def host_document(self, role_arn: str) -> dict[str, Any]:
         return {
             "Version": "2012-10-17",
             "Statement": [
                 {"Sid": "AssumeOnlyTheOpsAgentRole", "Effect": "Allow", "Action": "sts:AssumeRole",
-                 "Resource": f"arn:aws:iam::{self.args.account_id}:role/{ROLE_NAME}"}
+                 "Resource": role_arn}
             ],
         }
 
@@ -202,8 +219,8 @@ class Bootstrap:
         self.put_inline_policy(ROLE_NAME, ROLE_POLICY_NAME, policy,
                                f"attach inline policy {ROLE_POLICY_NAME} to {ROLE_NAME} (InvokeModel on the profile only)")
 
-    def ensure_host_policy(self) -> None:
-        document = self.host_document()
+    def ensure_host_policy(self, role_arn: str) -> None:
+        document = self.host_document(role_arn)
         self.put_inline_policy(
             self.args.host_role, HOST_POLICY_NAME, document,
             f"add inline policy {HOST_POLICY_NAME} to the HOST role {self.args.host_role} (sts:AssumeRole on {ROLE_NAME} only; "
@@ -267,8 +284,8 @@ class Bootstrap:
             for attempt in range(4):  # IAM changes take a few seconds to be visible
                 try:
                     decision = self.simulate(source, action, resource, context)
-                except Failed:
-                    decision = "error"  # a just-created role may not be visible yet
+                except Failed as exc:
+                    decision = f"error ({exc})"  # a just-created role may not be visible yet
                 good = decision == "allowed" if expected == "allowed" else decision in {"implicitDeny", "explicitDeny"}
                 if good:
                     break
@@ -287,11 +304,12 @@ class Bootstrap:
         host_arn = self.host_role_arn()
         policy, profile_arn = self.permissions_policy()
         # every refusal happens before the first change, so a refused run leaves nothing half-done
-        self.inline_matches(self.args.host_role, HOST_POLICY_NAME, self.host_document())
+        exists, role_arn = self.inspect_role(host_arn)
+        self.inline_matches(self.args.host_role, HOST_POLICY_NAME, self.host_document(role_arn))
         self.inline_matches(ROLE_NAME, ROLE_POLICY_NAME, policy)
-        role_arn = self.ensure_role(host_arn)
+        self.ensure_role(host_arn, exists)
         self.ensure_role_policy(policy)
-        self.ensure_host_policy()
+        self.ensure_host_policy(role_arn)
         self.ensure_budget()
         if not self.args.apply:
             print(f"\nNothing was changed. {len(self.mutations)} change(s) are planned above; add --apply to make them.")
