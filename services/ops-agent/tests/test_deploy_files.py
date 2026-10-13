@@ -71,3 +71,16 @@ def test_no_real_identifiers_are_committed() -> None:
         text = path.read_text(encoding="utf-8")
         assert not re.search(r"\b\d{12}\b", text), path.name  # AWS account ids
         assert not re.search(r"\bmi-[0-9a-f]{17}\b|\bi-[0-9a-f]{17}\b", text), path.name
+
+
+def test_install_script_is_lf_never_enables_the_timer_and_keeps_existing_config() -> None:
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[1] / "deploy" / "install.sh")
+    raw = script.read_bytes()
+    assert b"\r" not in raw
+    lines = [line.strip() for line in raw.decode().splitlines() if not line.strip().startswith(("#", "echo"))]
+    assert not any(line.startswith(("systemctl enable", "systemctl start")) for line in lines)
+    text = raw.decode()
+    assert '[ ! -f "$ETC/env" ]' in text and '[ ! -f "$ETC/aws-config" ]' in text  # never overwritten
+    assert "set -eu" in text
