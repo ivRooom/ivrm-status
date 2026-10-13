@@ -386,3 +386,15 @@ def test_the_role_arn_to_deploy_is_printed_as_iam_reports_it(capsys) -> None:
     assert f"role_arn of /etc/ivrm-ops-agent/aws-config on the host: {pathed}" in capsys.readouterr().out
     run(FakeAws())
     assert ROLE_ARN in capsys.readouterr().out  # the plan prints it too
+
+
+def test_no_budget_skips_the_budget_and_needs_no_email() -> None:
+    aws = FakeAws()
+    argv = ["--account-id", ACCOUNT, "--host-role", HOST, "--no-budget", "--apply"]
+    assert bootstrap.main(argv, runner=aws, sleep=lambda _s: None) == 0
+    assert not any(c[1] == "budgets" for c in aws.calls)
+    assert [(c[1], c[2]) for c in aws.mutations()] == [("iam", "create-role"), ("iam", "put-role-policy"), ("iam", "put-role-policy")]
+
+
+def test_without_no_budget_the_email_is_still_required() -> None:
+    assert bootstrap.main(["--account-id", ACCOUNT, "--host-role", HOST], runner=FakeAws()) == 2
