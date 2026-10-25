@@ -39,7 +39,10 @@ docs/                             API・認証・OCI運用資料
 
 ```text
 GET /api/status.json
+GET /api/status-history.json?days=30
 ```
+
+`/api/status-history.json` は1～30日の履歴とAvailabilityをAsia/Tokyoの日付単位で返します（デフォルト30日）。本番APIの実行コード・DB・ネットワーク境界は[DB/API/運用詳細](docs/system-design-20261026.md)を参照します。
 
 MinecraftとHertaを統合し、各サービスの現在状態と24時間タイムラインを返します。Hertaから120秒以上データを受信できない場合は、最後の正常状態を維持せず`unknown`へ変更します。
 
@@ -53,6 +56,7 @@ HMAC-SHA256、timestamp、request ID、本文hashで認証し、SQLiteでリプ�
 
 - `docs/status-api-schema.md`
 - `docs/status-ingest-auth.md`
+- `docs/system-design-20261026.md`（基本/詳細設計・ER・AS-IS/TO-BE・運用/テスト/受入）
 - `docs/oci-deployment.md`
 
 ## UIのフォールバック

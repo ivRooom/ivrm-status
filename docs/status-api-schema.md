@@ -6,7 +6,18 @@ Minecraft、Herta、将来のWeb・APIサービスを同じ形式で公開する
 
 ```text
 GET /api/status.json
+GET /api/status-history.json?days=30
 ```
+
+### 履歴API（2026-10-26ソース照合）
+
+- `days`: query integer、省略時30、許可範囲1～30。範囲外・不正値は `400 invalid_request`。
+- `Cache-Control: no-store, max-age=0`。`generated_at`, `range { days, from_date, to_date, timezone, min_impact_seconds }`, `services`, `incidents`, `maintenance`, `announcements`, `content_meta` を返す。
+- `range.timezone`は既定 `Asia/Tokyo`、日次bucketは日本時間。サービス別の `current_status`、`availability_percent`、日次 `{date,status,samples,availability_percent}` を保持し、欠測時のavailabilityはnullになり得る。
+- 既定の`min_impact_seconds=300`は短期的な影響の扱いの計算条件であり、監視SLAや実可用性を保証しない。
+- Source: `services/status-api/app/{main.py,models.py,service.py,impact.py}` と `tests/test_public_status.py`。実本番の稼働は別確認。
+
+`GET /healthz` はOCIコンテナ内部のDB readiness endpoint。DB接続成功は200 `{"status":"ok"}`、失敗は503 `{"status":"error"}`。一般公開するかどうかはCaddyの実設定で決まるため、公開APIとは区別する。
 
 サービスのLive Statusに加えて、Status Centerで明示的に公開されたIncident / Maintenance / Announcementを返します。
 

@@ -56,3 +56,5 @@ POST
 | request ID保持 | 600秒 |
 | rate limit | 10回/分/サービス |
 | Herta stale | 120秒 |
+
+失敗時の実装上のエラー分類（`services/status-api/app/main.py`）: 非JSON `415`、本文過大 `413`、ヘッダー不正/認証失敗 `401`、rate limit `429`、schema不正/ID不一致 `400`、同じrequest IDの再利用 `409`、SQLite保存失敗 `500`。正常受信は `202`（accepted=true）。パケット単位の再送/誤署名/clock skewの動作は実行試験とGitHub Actions記録で確認し、文書自体を実行済みの証拠としない。
