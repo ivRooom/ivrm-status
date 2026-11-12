@@ -3,6 +3,3 @@
 *.sh text eol=lf
 *.service text eol=lf
 *.timer text eol=lf
-services/ops-gate/ops/* text eol=lf
-services/ops-gate/run.sh text eol=lf
-services/ops-agent/deploy/* text eol=lf

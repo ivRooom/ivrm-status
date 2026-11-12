@@ -1,5 +1,7 @@
 # LLM Ops Agent 設計（案）
 
+> **廃止 (2026-11-12)**: 本設計に基づく ops-agent / ops-gate は未使用と確認され撤去された（ivrm-status #63）。本書は履歴として Archive とし、内容は現行構成を示さない。
+
 Status: Draft / 実装前のレビュー用
 
 ## 目的
